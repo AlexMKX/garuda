@@ -73,7 +73,7 @@ run "accepts_only_raw_key" {
       password        = null
       connection      = "ssh"
       network_os      = "linux"
-      ssh_private_key = "fixture-private-key-redacted"
+      ssh_private_key = "-----BEGIN OPENSSH PRIVATE KEY-----\nraw\n-----END OPENSSH PRIVATE KEY-----\n"
       instance_token  = "i-test-baseline"
     }
   }
@@ -135,7 +135,7 @@ run "raw_key_fingerprint_present_in_triggers" {
       user            = "testuser"
       connection      = "ssh"
       network_os      = "linux"
-      ssh_private_key = "fixture-private-key-redacted"
+      ssh_private_key = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n"
       instance_token  = "i-test-baseline"
     }
   }
@@ -189,7 +189,7 @@ run "validation_rejects_both_key_path_and_key_content" {
       connection           = "ssh"
       network_os           = "linux"
       ssh_private_key_file = "~/.ssh/id_ed25519"
-      ssh_private_key      = "fixture-private-key-redacted"
+      ssh_private_key      = "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n"
       instance_token       = "i-test-baseline"
     }
   }
