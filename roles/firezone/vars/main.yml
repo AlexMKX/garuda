@@ -1,0 +1,9 @@
+# Purpose: Define computed Firezone role variables derived from defaults and runtime context.
+# Entry points: Loaded automatically by roles/firezone.
+# Inputs: fz_client_subnet and fz_firezone_dir.
+# Outputs: firezone_client_gateway, firezone_main_compose_file.
+# Side effects: None; variable definitions only.
+# Tags: n/a.
+
+firezone_client_gateway: "{{ fz_client_subnet | ansible.utils.nthhost(1) }}"
+firezone_main_compose_file: "{{ fz_firezone_dir }}/docker-compose.yml"

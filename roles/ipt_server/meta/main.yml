@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  author: Alex MK
+  description: Deploy the geo-routing ipt_server + PowerDNS compose stack.
+  license: GPL-2.0-or-later
+  min_ansible_version: "2.15"
+  galaxy_tags:
+    - networking
+
+dependencies:
+  - role: common

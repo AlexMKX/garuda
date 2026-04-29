@@ -1,0 +1,18 @@
+---
+argument_specs:
+  provision:
+    short_description: Configure swap file and Docker daemon prerequisites.
+    options:
+      docker_daemon_config:
+        type: dict
+        required: false
+        default: {}
+        description: Content rendered into /etc/docker/daemon.json.
+      reboot_on_change:
+        type: bool
+        required: false
+        default: true
+        description: Whether to reboot the host after running geerlingguy.docker.
+  destroy:
+    short_description: Remove Docker daemon config and restart service.
+    options: {}

@@ -1,0 +1,13 @@
+---
+wireguard_mesh_root: /opt/mesh
+wireguard_ops_root: /opt/mesh/ops
+
+# Image delivery contract
+wireguard_image: garuda/wireguard:latest
+
+# Backbone / RPDB defaults
+wireguard_listen_port: ""
+wireguard_public_endpoint: ""
+wireguard_labels: {}
+
+wireguard_nic_attach: ["backbone"]

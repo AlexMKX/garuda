@@ -1,0 +1,17 @@
+---
+- name: Remove ospf-injector compose stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ backbone_dir }}"
+    state: absent
+  register: _compose_down
+  failed_when: false
+
+- name: Log compose teardown failure (destroy path is best-effort)
+  ansible.builtin.debug:
+    msg: "compose teardown returned rc={{ _compose_down.rc | default('n/a') }}: {{ _compose_down.msg | default('') }}"
+  when: _compose_down.failed | default(false)
+
+- name: Remove backbone directory
+  ansible.builtin.file:
+    path: "{{ backbone_dir }}"
+    state: absent

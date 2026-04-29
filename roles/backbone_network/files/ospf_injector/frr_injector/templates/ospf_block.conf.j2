@@ -1,0 +1,43 @@
+{%- if cfg.has_extra_b64 -%}
+{% if cfg.router_id or cfg.default_originate %}
+
+router ospf
+{% if cfg.router_id %}
+ ospf router-id {{ cfg.router_id }}
+{% endif %}
+{% if cfg.default_originate %}
+ default-information originate
+{% endif %}
+{% endif %}
+{%- else -%}
+{% for iface in cfg.ordered_interfaces %}
+
+interface {{ iface }}
+ ip ospf area {{ OSPF_AREA }}
+{% if iface in cfg.active_set %}
+ ip ospf hello-interval 5
+ ip ospf dead-interval 15
+ ip ospf mtu-ignore
+{% else %}
+ ip ospf passive
+{% endif %}
+{%- endfor %}
+{% if cfg.transit_provider %}
+
+route-map {{ TRANSIT_ROUTE_MAP }} permit 10
+ set tag {{ TRANSIT_TAG }}
+{% endif %}
+
+router ospf
+ ospf router-id {{ cfg.router_id }}
+{% for r in cfg.redistribute %}
+ redistribute {{ r }}
+{% endfor %}
+{% if cfg.default_originate %}
+{% if cfg.transit_provider %}
+ default-information originate always metric {{ TRANSIT_METRIC }} metric-type {{ TRANSIT_METRIC_TYPE }} route-map {{ TRANSIT_ROUTE_MAP }}
+{% else %}
+ default-information originate
+{% endif %}
+{% endif %}
+{%- endif -%}

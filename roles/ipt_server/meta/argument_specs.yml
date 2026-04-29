@@ -1,0 +1,20 @@
+---
+argument_specs:
+  provision:
+    short_description: Deploy the ipt_server compose stack.
+    options:
+      ipt_server_dir:
+        type: str
+        required: true
+      ipt_server_image:
+        type: str
+        required: true
+      ipt_powerdns_image:
+        type: str
+        required: true
+  destroy:
+    short_description: Tear down the ipt_server compose stack.
+    options:
+      ipt_server_dir:
+        type: str
+        required: true

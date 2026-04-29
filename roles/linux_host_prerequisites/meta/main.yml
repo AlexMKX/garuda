@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  author: Alex MK
+  description: Configure Docker prerequisites (daemon config + service) on a Linux host.
+  license: GPL-2.0-or-later
+  min_ansible_version: "2.15"
+  galaxy_tags:
+    - docker
+
+dependencies:
+  - role: common

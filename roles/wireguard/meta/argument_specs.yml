@@ -1,0 +1,57 @@
+---
+argument_specs:
+  provision:
+    short_description: Apply WireGuard tunnel runtime config on a Linux host.
+    options:
+      wireguard_tunnel_name:
+        type: str
+        required: false
+        description: Tunnel directory name; defaults to wireguard_interface_name.
+      wireguard_interface_name:
+        type: str
+        required: true
+      wireguard_address:
+        type: str
+        required: true
+      wireguard_private_key:
+        type: str
+        required: true
+        no_log: true
+      wireguard_table:
+        type: raw
+        required: true
+      wireguard_peer_public_key:
+        type: str
+        required: true
+      wireguard_peer_allowed_ips:
+        type: list
+        elements: str
+        required: true
+      wireguard_mesh_root:
+        type: str
+        required: false
+        default: /opt/garuda/wg_tunnels
+      wireguard_image:
+        type: str
+        required: true
+      wireguard_ops_root:
+        type: str
+        required: false
+        default: /opt/garuda/ops
+  destroy:
+    short_description: Remove a WireGuard tunnel from a Linux host.
+    options:
+      wireguard_tunnel_name:
+        type: str
+        required: false
+      wireguard_interface_name:
+        type: str
+        required: false
+      wireguard_mesh_root:
+        type: str
+        required: false
+        default: /opt/garuda/wg_tunnels
+      wireguard_ops_root:
+        type: str
+        required: false
+        default: /opt/garuda/ops

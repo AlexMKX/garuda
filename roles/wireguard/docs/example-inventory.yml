@@ -1,0 +1,28 @@
+---
+# Example inventory for WireGuard mesh deployment
+#
+# This inventory defines two nodes:
+# - node-a: Internal router (host network mode)
+# - node-b: External border router (bridge network mode with NAT)
+
+all:
+  vars:
+    # WireGuard mesh network configuration
+    wireguard_mesh_root: /opt/mesh
+    wireguard_ops_root: /opt/mesh/ops
+
+  children:
+    mesh_nodes:
+      hosts:
+        node-a:
+          ansible_host: "10.0.1.10"
+          ansible_ssh_user: "admin"
+          ansible_become: true
+          ansible_python_interpreter: /usr/bin/python3
+
+        node-b:
+          ansible_host: "203.0.113.50"
+          ansible_ssh_user: "admin"
+          ansible_become: true
+          ansible_python_interpreter: /usr/bin/python3
+

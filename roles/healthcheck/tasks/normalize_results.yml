@@ -1,0 +1,29 @@
+---
+# Purpose: Normalize raw probe results into a uniform per-check dict list.
+# Entry points: Included from tasks/main.yml after platform-specific check tasks.
+# Inputs: _hc_raw_peer_results (MikroTik only), _hc_raw_ospf_results, _hc_raw_container_results.
+# Outputs: healthcheck_results fact (list of normalized result dicts).
+# Result shape: {host, platform, check_type, target, status, reason, details}
+# Note: Linux never sets _hc_raw_peer_results; defaults to [] for the Linux path.
+
+- name: Build normalized healthcheck_results
+  ansible.builtin.set_fact:
+    healthcheck_results: >-
+      {%- set raw = (
+        (_hc_raw_peer_results | default([])) +
+        (_hc_raw_ospf_results | default([])) +
+        (_hc_raw_container_results | default([]))
+      ) -%}
+      {%- set result = [] -%}
+      {%- for item in raw -%}
+        {%- set _ = result.append({
+          'host':       inventory_hostname,
+          'platform':   item.get('platform', 'unknown'),
+          'check_type': item.get('check_type', 'unknown'),
+          'target':     item.get('target', ''),
+          'status':     item.get('status', 'unknown'),
+          'reason':     item.get('reason', ''),
+          'details':    item.get('details', {})
+        }) -%}
+      {%- endfor -%}
+      {{ result }}

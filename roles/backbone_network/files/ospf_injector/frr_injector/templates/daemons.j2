@@ -1,0 +1,9 @@
+zebra=yes
+ospfd=yes
+{% if pbr_enabled %}
+pbrd=yes
+pbrd_options="-A 127.0.0.1"
+{% endif %}
+zebra_options="-A 127.0.0.1 -s 90000000"
+ospfd_options="-A 127.0.0.1"
+vtysh_enable=yes

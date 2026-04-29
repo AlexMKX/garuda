@@ -1,0 +1,21 @@
+---
+# Purpose: Tear down the ipt_server compose stack and remove its directory.
+# Entry points: Invoked by modules/linux_apply dispatcher via tasks_from=destroy.
+
+- name: Check if compose file exists
+  ansible.builtin.stat:
+    path: "{{ ipt_server_dir + '/docker-compose.yml' }}"
+  register: _ipt_compose_file_stat
+
+- name: Stop existing stack
+  ansible.builtin.command:
+    cmd: docker compose down --remove-orphans --timeout 30
+    chdir: "{{ ipt_server_dir }}"
+  when: _ipt_compose_file_stat.stat.exists
+  failed_when: false
+  changed_when: true
+
+- name: Remove IPT server directory on destroy
+  ansible.builtin.file:
+    path: "{{ ipt_server_dir }}"
+    state: absent

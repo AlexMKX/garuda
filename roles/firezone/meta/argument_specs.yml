@@ -1,0 +1,30 @@
+---
+argument_specs:
+  provision:
+    short_description: Deploy the Firezone compose stack.
+    options:
+      fz_firezone_dir:
+        type: str
+        required: true
+      fz_firezone_image:
+        type: str
+        required: true
+      firezone_main_compose_file:
+        type: str
+        required: true
+      fz_admin_password:
+        type: str
+        required: false
+        no_log: true
+      workload_result_path:
+        type: str
+        required: false
+  destroy:
+    short_description: Tear down the Firezone compose stack.
+    options:
+      fz_firezone_dir:
+        type: str
+        required: true
+      firezone_main_compose_file:
+        type: str
+        required: true

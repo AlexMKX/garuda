@@ -1,0 +1,36 @@
+{%- set wireguard_public_endpoint = wireguard_public_endpoint | default('') -%}
+{%- set _nets = wireguard_nic_attach | compose_networks -%}
+
+services:
+  {{ wireguard_interface_name }}:
+    restart: unless-stopped
+    image: {{ wireguard_image }}
+    env_file:
+      - {{ wg_target_dir }}/.env
+    cap_add:
+      - NET_ADMIN
+    labels:
+{% for label_key, label_value in (wireguard_labels | default({}) | dictsort) %}
+      {{ label_key | tojson }}: {{ label_value | tojson }}
+{% endfor %}
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/health_check.sh"]
+      interval: 10s
+      timeout: 15s
+      retries: 3
+      start_period: 2m
+{% if wireguard_listen_port and wireguard_public_endpoint %}
+    ports:
+      - "{{ wireguard_listen_port }}:{{ wireguard_listen_port }}/udp"
+{% endif %}
+    networks:
+      wireguard_net:
+{{ _nets.service | to_nice_yaml(indent=2) | indent(6, true) }}
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
+
+networks:
+  wireguard_net:
+    driver: bridge
+{{ _nets.stack | to_nice_yaml(indent=2) | indent(2, true) }}

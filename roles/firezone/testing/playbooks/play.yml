@@ -1,0 +1,28 @@
+# Purpose: Provision test host prerequisites and run firezone role in testing environment.
+# Entry points: Manual test run with a caller-supplied inventory defining host group `testing`.
+# Inputs: ansible_facts memory data and vars from ../vars.yml.
+# Outputs: Installed docker/swap prerequisites and applied firezone role on testing host.
+# Side effects: Installs packages/roles and deploys Firezone stack on target host.
+# Tags: inherited from caller.
+
+- hosts: testing
+  tasks:
+    - set_fact:
+        mem_available: "{{ (ansible_facts.memory_mb.real.free + ansible_facts.memory_mb.swap.free | default(0)) }}"
+    - include_role:
+        name: geerlingguy.swap
+      vars:
+        swap_file_size_mb: '{{ ansible_facts.memory_mb.swap.free | default(0) + 1024 }}'
+      when: mem_available|int < 768
+    - include_role:
+        name: geerlingguy.docker
+      vars:
+        docker_edition: 'ce'
+        docker_install_compose: false
+        docker_install_compose_plugin: false
+
+- name: Install Firezone
+  hosts: testing
+  roles:
+    - "{{ playbook_dir }}/../../"
+  vars_files: ../vars.yml

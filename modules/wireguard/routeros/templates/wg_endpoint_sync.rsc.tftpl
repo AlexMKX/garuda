@@ -1,0 +1,35 @@
+# Single-tunnel endpoint sync script.
+# Resolves the endpoint DNS name and reconciles exactly one /routing rule
+# identified by the per-tunnel comment "wg-ep:${tunnel_name}".
+
+:local listName "${list_name}"
+:local tableName "${table_name}"
+:local ruleComment "wg-ep:${tunnel_name}"
+
+:local entry [/ip firewall address-list find where list=$listName dynamic=no]
+:if ([:len $entry] = 0) do={
+  :local existing [/routing rule find where comment=$ruleComment]
+  :if ([:len $existing] > 0) do={
+    /routing rule remove $existing
+  }
+  :return
+}
+
+:local dnsName [/ip firewall address-list get ($entry->0) address]
+:local resolvedIp [:resolve $dnsName]
+:local dstAddr ($resolvedIp . "/32")
+:local existing [/routing rule find where comment=$ruleComment]
+
+# Use lookup-only-in-table (NOT lookup): if the bypass table is empty
+# at the moment this rule is evaluated, packets must be dropped rather
+# than fall through to main, where the WG default would self-loop the
+# handshake back into the tunnel. With persistent-keepalive=25s the
+# handshake retries, by which point the caller-supplied default route
+# is in the bypass table.
+:if ([:len $existing] = 0) do={
+  /routing rule add dst-address=$dstAddr action=lookup-only-in-table table=$tableName comment=$ruleComment
+  :log info ("wg-ep-sync: +rule " . $dstAddr . " [" . "${tunnel_name}" . "]")
+} else={
+  /routing rule set ($existing->0) dst-address=$dstAddr action=lookup-only-in-table table=$tableName comment=$ruleComment
+  :log info ("wg-ep-sync: rule updated " . $dstAddr . " [" . "${tunnel_name}" . "]")
+}

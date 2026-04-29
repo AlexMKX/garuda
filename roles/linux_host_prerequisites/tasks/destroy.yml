@@ -1,0 +1,19 @@
+---
+# Purpose: Remove Docker prerequisites-owned config from a Linux host.
+# Entry points: Invoked by modules/linux_apply dispatcher via tasks_from=destroy.
+
+- name: Remove Docker daemon config written by prerequisites
+  ansible.builtin.file:
+    path: /etc/docker/daemon.json
+    state: absent
+
+- name: Remove IPv4 forwarding sysctl drop-in written by prerequisites
+  ansible.builtin.file:
+    path: /etc/sysctl.d/99-garuda-linux_host_prerequisites.conf
+    state: absent
+
+- name: Restart Docker after prerequisites cleanup
+  ansible.builtin.systemd:
+    name: docker
+    state: restarted
+    daemon_reload: true

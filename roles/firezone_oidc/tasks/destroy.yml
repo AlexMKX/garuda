@@ -1,0 +1,16 @@
+---
+# Purpose: firezone_oidc destroy is an intentional no-op.
+# Entry points: Invoked by modules/linux_apply dispatcher via tasks_from=destroy.
+# Rationale: OIDC providers live inside the Firezone application database.
+#            They are implicitly removed when Firezone itself is destroyed
+#            (roles/firezone destroy wipes the compose stack and volumes).
+#            A dedicated OIDC teardown here would either duplicate that
+#            behavior or require a live Firezone API — which is not
+#            guaranteed to be reachable during destroy.
+
+- name: firezone_oidc destroy is a no-op
+  ansible.builtin.debug:
+    msg: >-
+      firezone_oidc destroy is intentionally a no-op. OIDC providers
+      are part of the Firezone application database and are removed
+      when the Firezone stack itself is destroyed.

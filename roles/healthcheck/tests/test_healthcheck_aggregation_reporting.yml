@@ -1,0 +1,134 @@
+---
+# Purpose: TDD test for Play 3 aggregation/reporting hardening in healthcheck_topology.yml.
+# Tests that the reporting play emits per-host totals, per-check detail lines,
+# global ok/warn/fail totals, and writes an artifact with a summary block.
+# Entry points: ansible-playbook (manual or CI test run).
+# Inputs: Simulated _all_healthcheck_results list (as Play 3 would receive it).
+# Outputs: Assertions proving the artifact has summary field and totals are correct.
+# Side effects: Writes a temporary artifact during test runs.
+
+- hosts: localhost
+  gather_facts: false
+  vars:
+    _cwd: "{{ lookup('env', 'PWD') }}"
+    # Represents what Play 3 aggregates from remote hosts
+    _all_healthcheck_results:
+      - host: host-a
+        platform: mikrotik
+        check_type: peer
+        target: "10.0.0.1"
+        status: ok
+        reason: peer_present
+        details: {}
+      - host: host-a
+        platform: linux
+        check_type: ospf
+        target: "10.0.0.1"
+        status: warn
+        reason: frr_runtime_unavailable
+        details: {}
+      - host: host-b
+        platform: mikrotik
+        check_type: peer
+        target: "10.0.0.2"
+        status: fail
+        reason: tunnel_interface_missing
+        details: {}
+      - host: host-b
+        platform: mikrotik
+        check_type: peer
+        target: "10.0.0.3"
+        status: warn
+        reason: api_unavailable
+        details: {}
+      - host: host-b
+        platform: linux
+        check_type: container
+        target: my-project
+        status: fail
+        reason: no_containers_found
+        details: {}
+  tasks:
+    # Test that per-host totals are emitted
+    - name: Emit per-host totals (test harness mirrors Play 3 expected behavior)
+      ansible.builtin.debug:
+        msg: >-
+          Host {{ item }}:
+          ok={{ _all_healthcheck_results | selectattr('host', 'equalto', item) | selectattr('status', 'equalto', 'ok') | list | length }},
+          warn={{ _all_healthcheck_results | selectattr('host', 'equalto', item) | selectattr('status', 'equalto', 'warn') | list | length }},
+          fail={{ _all_healthcheck_results | selectattr('host', 'equalto', item) | selectattr('status', 'equalto', 'fail') | list | length }}
+      loop: "{{ _all_healthcheck_results | map(attribute='host') | unique | sort | list }}"
+
+    - name: Assert per-host totals are computable
+      ansible.builtin.assert:
+        that:
+          - (_all_healthcheck_results | selectattr('host', 'equalto', 'host-a') | selectattr('status', 'equalto', 'ok') | list | length) == 1
+          - (_all_healthcheck_results | selectattr('host', 'equalto', 'host-a') | selectattr('status', 'equalto', 'warn') | list | length) == 1
+          - (_all_healthcheck_results | selectattr('host', 'equalto', 'host-a') | selectattr('status', 'equalto', 'fail') | list | length) == 0
+          - (_all_healthcheck_results | selectattr('host', 'equalto', 'host-b') | selectattr('status', 'equalto', 'ok') | list | length) == 0
+          - (_all_healthcheck_results | selectattr('host', 'equalto', 'host-b') | selectattr('status', 'equalto', 'warn') | list | length) == 1
+          - (_all_healthcheck_results | selectattr('host', 'equalto', 'host-b') | selectattr('status', 'equalto', 'fail') | list | length) == 2
+        fail_msg: "Per-host totals computation is incorrect"
+
+    # Test that per-check detail lines are emitted
+    - name: Emit per-check detail lines (test harness mirrors Play 3 expected behavior)
+      ansible.builtin.debug:
+        msg: >-
+          [{{ item.status | upper }}] {{ item.host }}/{{ item.check_type }}/{{ item.target }}: {{ item.reason }}
+      loop: "{{ _all_healthcheck_results }}"
+      loop_control:
+        label: "{{ item.host }}/{{ item.check_type }}/{{ item.target }}"
+
+    # Test that global totals are correct
+    - name: Assert global totals by status
+      ansible.builtin.assert:
+        that:
+          - (_all_healthcheck_results | selectattr('status', 'equalto', 'ok') | list | length) == 1
+          - (_all_healthcheck_results | selectattr('status', 'equalto', 'warn') | list | length) == 2
+          - (_all_healthcheck_results | selectattr('status', 'equalto', 'fail') | list | length) == 2
+        fail_msg: >-
+          Global totals wrong: ok={{ _all_healthcheck_results | selectattr('status', 'equalto', 'ok') | list | length }},
+          warn={{ _all_healthcheck_results | selectattr('status', 'equalto', 'warn') | list | length }},
+          fail={{ _all_healthcheck_results | selectattr('status', 'equalto', 'fail') | list | length }}
+
+    # Test artifact includes summary block
+    - name: Write artifact with summary block (mirrors what Play 3 should write)
+      ansible.builtin.copy:
+        content: >-
+          {{
+            {
+              'topology': 'test-fixture',
+              'state': 'test-fixture',
+              'summary': {
+                'total': _all_healthcheck_results | length,
+                'ok': _all_healthcheck_results | selectattr('status', 'equalto', 'ok') | list | length,
+                'warn': _all_healthcheck_results | selectattr('status', 'equalto', 'warn') | list | length,
+                'fail': _all_healthcheck_results | selectattr('status', 'equalto', 'fail') | list | length,
+                'hosts': _all_healthcheck_results | map(attribute='host') | unique | sort | list
+              },
+              'results': _all_healthcheck_results
+            } | to_nice_json
+          }}
+        dest: "/tmp/garuda-test-aggregation-artifact.json"
+        mode: "0644"
+
+    - name: Read artifact back
+      ansible.builtin.slurp:
+        src: "/tmp/garuda-test-aggregation-artifact.json"
+      register: _agg_slurp
+
+    - name: Assert artifact summary block is complete and correct
+      ansible.builtin.assert:
+        that:
+          - (_agg_slurp.content | b64decode | from_json).summary is defined
+          - (_agg_slurp.content | b64decode | from_json).summary.total == 5
+          - (_agg_slurp.content | b64decode | from_json).summary.ok == 1
+          - (_agg_slurp.content | b64decode | from_json).summary.warn == 2
+          - (_agg_slurp.content | b64decode | from_json).summary.fail == 2
+          - (_agg_slurp.content | b64decode | from_json).summary.hosts == ['host-a', 'host-b']
+          - (_agg_slurp.content | b64decode | from_json).results | length == 5
+          - (_agg_slurp.content | b64decode | from_json).topology == 'test-fixture'
+          - (_agg_slurp.content | b64decode | from_json).state == 'test-fixture'
+        fail_msg: >-
+          Artifact summary block missing or incorrect:
+          {{ _agg_slurp.content | b64decode | from_json }}

@@ -1,0 +1,6 @@
+---
+ensure_docker_image_name: ""
+ensure_docker_image_build_path: ""
+ensure_docker_image_archive_name: image.tar
+ensure_docker_image_controller_temp_prefix: ensure-docker-image-
+ensure_docker_image_target_temp_prefix: ensure-docker-image-

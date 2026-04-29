@@ -1,0 +1,24 @@
+---
+# Purpose: Define default variables for Firezone deployment and bootstrap behavior.
+# Entry points: Loaded automatically by roles/firezone.
+# Inputs: Optional fz_config map overrides from inventory/play vars.
+# Outputs: Derived fz_* defaults for compose and networking settings.
+# Side effects: None; variable defaults only.
+# Tags: n/a.
+
+fz_config: {}
+## Firezone admin email
+fz_client_subnet: "{{fz_config['fz_client_subnet'] | default ('10.11.0.0/24')}}"
+fz_admin: "{{fz_config['fz_admin'] | default ('fz-admin@localhost')}}"
+fz_admin_password: "{{fz_config['fz_admin_password'] | default (lookup('community.general.random_string', base64=true, length=12))  }}"
+fz_wireguard_port: "{{fz_config['fz_wireguard_port'] | default ('51620')}}"
+fz_firezone_dir: /opt/garuda/firezone
+fz_firezone_https: "{{fz_config['fz_firezone_https'] | default (true)}}"
+fz_server_url: "{{fz_config['fz_server_url'] | default ('https://'+ansible_host)}}"
+fz_mgmt_subnet: "{{fz_config['fz_mgmt_subnet'] | default ()}}"
+fz_firezone_image: "{{fz_config['fz_firezone_image'] | default ('local/firezone:0.7.30-nftedgefix')}}"
+
+# Backbone / policy routing
+fz_nic_attach: "{{ fz_config['fz_nic_attach'] | default(['backbone']) }}"
+
+firezone_labels: {}

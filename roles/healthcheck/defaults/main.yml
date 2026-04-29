@@ -1,0 +1,15 @@
+---
+# Purpose: Define default variables for the healthcheck role.
+# Entry points: Loaded automatically by roles/healthcheck.
+# Inputs: Overridden by role_input_map mapped inputs per host.
+# Outputs: Default empty check lists; real values come from mapped inputs.
+# Side effects: None; variable defaults only.
+
+# Peer tunnel reachability checks: list of {tunnel, peer, ip}
+healthcheck_peer_checks: []
+
+# OSPF neighbour checks: list of peer tunnel IP strings
+healthcheck_ospf_checks: []
+
+# Compose project substacks to probe for liveness (Linux hosts only): list of project names
+healthcheck_container_substacks: []

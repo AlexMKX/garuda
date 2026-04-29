@@ -1,0 +1,10 @@
+---
+# linux_apply contract declaration for this role.
+#
+# This file is separate from meta/main.yml because Ansible 2.15+
+# (RoleMetadata._validate_attributes) rejects unknown top-level keys in
+# meta/main.yml. See docs/superpowers/specs/2026-04-21-linux-apply-role-contract-design.md
+
+terraform:
+  linux_apply:
+    compatible: true

@@ -1,0 +1,15 @@
+---
+# Purpose: Test variable set for Firezone role validation playbook.
+# Entry points: Loaded by roles/firezone/testing/playbooks/play.yml.
+# Inputs: Manual test values for subnets, ports, and server URL.
+# Outputs: Variable context consumed by firezone role during test deploy.
+# Side effects: None; variable definitions only.
+# Tags: n/a.
+
+fz_admin: fz-admin@localhost
+fz_mgmt_subnet: 172.30.201.0/24
+fz_client_subnet: 172.30.224.0/20
+fz_wireguard_port: "51620"
+fz_firezone_dir: "/opt/garuda/firezone"
+fz_firezone_https: false
+fz_server_url: https://oidc.example.com

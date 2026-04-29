@@ -1,0 +1,135 @@
+---
+# Purpose: Real Linux healthcheck probes for compose substacks and OSPF via FRR runtime.
+# Entry points: Included from tasks/main.yml on Linux hosts.
+# Inputs: healthcheck_ospf_checks, healthcheck_container_substacks.
+# Outputs: _hc_raw_ospf_results, _hc_raw_container_results facts.
+# Side effects: None (read-only probes; failures captured as warn/fail, never fatal).
+
+# ── Compose substack checks ───────────────────────────────────────────────────
+# For each required substack: list containers, check running + healthy state.
+
+- name: List containers for compose substack (Linux)
+  ansible.builtin.command:
+    argv:
+      - docker
+      - ps
+      - -a
+      - --filter
+      - "label=com.docker.compose.project={{ item }}"
+      - --format
+      - "{{ '{{json .}}' }}"
+  loop: "{{ healthcheck_container_substacks }}"
+  loop_control:
+    label: "{{ item }}"
+  register: _hc_substack_results
+  become: true
+  failed_when: false
+  changed_when: false
+
+- name: Build normalized container results (Linux)
+  ansible.builtin.set_fact:
+    _hc_raw_container_results: >-
+      {%- set result = [] -%}
+      {%- for idx in range(healthcheck_container_substacks | length) -%}
+        {%- set project = healthcheck_container_substacks[idx] -%}
+        {%- set item    = _hc_substack_results.results[idx] -%}
+        {%- if item.rc is not defined -%}
+          {%- set status = 'warn' -%}
+          {%- set reason = 'docker_unavailable' -%}
+          {%- set details = {} -%}
+        {%- else -%}
+          {%- set lines = item.stdout | default('') | trim | split('\n') | select | list -%}
+          {%- if lines | length == 0 -%}
+            {%- set status = 'fail' -%}
+            {%- set reason = 'no_containers_found' -%}
+            {%- set details = {'docker_rc': item.rc} -%}
+          {%- else -%}
+            {%- set not_running = [] -%}
+            {%- set not_healthy = [] -%}
+            {%- for line in lines -%}
+              {%- set c = line | from_json -%}
+              {%- if c.get('State', '') | lower != 'running' -%}
+                {%- set _ = not_running.append(c.get('Names', c.get('ID', ''))) -%}
+              {%- elif c.get('Status', '') | lower is search('unhealthy') -%}
+                {%- set _ = not_healthy.append(c.get('Names', c.get('ID', ''))) -%}
+              {%- endif -%}
+            {%- endfor -%}
+            {%- if not_running | length > 0 -%}
+              {%- set status = 'fail' -%}
+              {%- set reason = 'container_not_running' -%}
+              {%- set details = {'not_running': not_running} -%}
+            {%- elif not_healthy | length > 0 -%}
+              {%- set status = 'fail' -%}
+              {%- set reason = 'container_unhealthy' -%}
+              {%- set details = {'not_healthy': not_healthy} -%}
+            {%- else -%}
+              {%- set status = 'ok' -%}
+              {%- set reason = 'running' -%}
+              {%- set details = {'container_count': lines | length} -%}
+            {%- endif -%}
+          {%- endif -%}
+        {%- endif -%}
+        {%- set _ = result.append({
+          'check_type': 'container',
+          'platform':   'linux',
+          'target':     project,
+          'status':     status,
+          'reason':     reason,
+          'details':    details
+        }) -%}
+      {%- endfor -%}
+      {{ result }}
+
+# ── OSPF neighbor checks via FRR runtime ─────────────────────────────────────
+# Queries OSPF state inside the FRR container; never calls host-level vtysh.
+
+- name: Query OSPF neighbor state via FRR container runtime (Linux)
+  ansible.builtin.shell:
+    cmd: >-
+      docker exec
+      $(docker ps -q --filter "label=com.docker.compose.project=frr" --filter "label=com.docker.compose.service=frr" | head -1)
+      vtysh -c 'show ip ospf neighbor {{ item }} json'
+  loop: "{{ healthcheck_ospf_checks }}"
+  loop_control:
+    label: "{{ item }}"
+  register: _hc_ospf_results
+  become: true
+  failed_when: false
+  changed_when: false
+
+- name: Build normalized OSPF results (Linux)
+  ansible.builtin.set_fact:
+    _hc_raw_ospf_results: >-
+      {%- set result = [] -%}
+      {%- for idx in range(healthcheck_ospf_checks | length) -%}
+        {%- set ip   = healthcheck_ospf_checks[idx] -%}
+        {%- set item = _hc_ospf_results.results[idx] -%}
+        {%- if item.rc is not defined -%}
+          {%- set status = 'warn' -%}
+          {%- set reason = 'frr_runtime_unavailable' -%}
+        {%- else -%}
+          {%- set raw = item.stdout | default('') -%}
+          {%- if 'Full' in raw -%}
+            {%- set status = 'ok' -%}
+            {%- set reason = 'neighbor_full' -%}
+          {%- elif raw in ('{}', '') or item.rc != 0 -%}
+            {%- set status = 'warn' -%}
+            {%- set reason = 'frr_runtime_unavailable' -%}
+          {%- else -%}
+            {%- set status = 'fail' -%}
+            {%- set reason = 'neighbor_not_full' -%}
+          {%- endif -%}
+        {%- endif -%}
+        {%- set _ = result.append({
+          'check_type': 'ospf',
+          'platform':   'linux',
+          'target':     ip,
+          'status':     status,
+          'reason':     reason,
+          'details': {
+            'ospf_rc':     item.rc     | default(none),
+            'ospf_output': item.stdout | default('')
+          }
+        }) -%}
+      {%- endfor -%}
+      {{ result }}

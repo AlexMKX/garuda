@@ -1,0 +1,87 @@
+---
+# Purpose: Provision the ipt_server stack (compose-managed geo-router + PowerDNS).
+# Entry points: Invoked by modules/linux_apply dispatcher via tasks_from=provision.
+
+- name: Ensure ipt_server directory exists
+  ansible.builtin.file:
+    path: "{{ ipt_server_dir }}"
+    state: directory
+
+- name: Ensure backbone is in ipt_nic_attach
+  ansible.builtin.set_fact:
+    ipt_nic_attach: "{{ (ipt_nic_attach | default([]) + ['backbone']) | unique | list }}"
+
+- name: Merge ipt_server constant labels with caller-supplied labels
+  ansible.builtin.set_fact:
+    ipt_server_labels: "{{ _ipt_server_constant_labels | combine(ipt_server_labels | default({})) }}"
+  vars:
+    _ipt_server_constant_labels:
+      garuda.operator-scope: "backbone_network"
+      garuda.frr.ospf.enabled: "true"
+      garuda.frr.ospf.interfaces: "backbone"
+      garuda.frr.ospf.active_interfaces: "backbone"
+      garuda.frr.ospf.redistribute: "kernel"
+      garuda.transit.provider: "true"
+
+# C1: register on include_role doesn't capture changed; stash via set_fact instead
+# C3: role_path changes to included role's path inside include_role; capture it first
+- name: Capture ipt_server role path before include_role
+  ansible.builtin.set_fact:
+    _ipt_server_role_path: "{{ role_path }}"
+
+- name: Ensure ipt_server image is present on target
+  ansible.builtin.include_role:
+    name: ensure_docker_image
+  vars:
+    ensure_docker_image_name: "{{ ipt_server_image }}"
+    ensure_docker_image_build_path: "{{ _ipt_server_role_path }}/files/ipt-server"
+
+- name: Stash ipt_server image load result
+  ansible.builtin.set_fact:
+    _ipt_server_image_changed: "{{ _ensure_docker_image_needs_load | default(false) | bool }}"
+
+- name: Ensure powerdns image is present on target
+  ansible.builtin.include_role:
+    name: ensure_docker_image
+  vars:
+    ensure_docker_image_name: "{{ ipt_powerdns_image }}"
+    ensure_docker_image_build_path: "{{ _ipt_server_role_path }}/files/powerdns"
+
+- name: Stash powerdns image load result
+  ansible.builtin.set_fact:
+    _ipt_powerdns_image_changed: "{{ _ensure_docker_image_needs_load | default(false) | bool }}"
+
+- name: Render ipt_server env file
+  ansible.builtin.template:
+    src: "ipt_server.env.j2"
+    dest: "{{ ipt_server_dir + '/.env' }}"
+    mode: '0600'
+  register: _ipt_env_file_result
+
+- name: Write docker-compose file
+  ansible.builtin.template:
+    src: "compose_ipt_server.yml.j2"
+    dest: "{{ ipt_server_dir + '/docker-compose.yml' }}"
+  register: _ipt_compose_file_result
+
+- name: Set ipt_server recreate flag
+  ansible.builtin.set_fact:
+    ipt_force_recreate: >-
+      {{ _ipt_server_image_changed | bool or _ipt_powerdns_image_changed | bool
+         or _ipt_env_file_result.changed | bool
+         or _ipt_compose_file_result.changed | bool }}
+
+- name: Recreate services on image or config change
+  community.docker.docker_compose_v2:
+    project_src: "{{ ipt_server_dir }}"
+    recreate: always
+    state: present
+    wait: yes
+  when: ipt_force_recreate | default(false) | bool
+
+- name: Converge compose stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ ipt_server_dir }}"
+    state: present
+    wait: yes
+  when: not (ipt_force_recreate | default(false) | bool)

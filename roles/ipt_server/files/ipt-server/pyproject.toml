@@ -1,0 +1,44 @@
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["."]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+
+[tool.coverage.run]
+branch = true
+include = [
+    "Config.py",
+    "Router.py",
+    "dns_records.py",
+    "lib.py",
+    "nexthop.py",
+    "route.py",
+    "route_config.py",
+    "route_health.py",
+    "ipdb/*.py",
+    "ipt_server/**/*.py",
+    "tasks/*.py",
+    "nftables/*.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+
+[tool.pylint.main]
+ignore-paths = ["^.*/tests/.*$"]
+
+[tool.pylint."messages control"]
+disable = [
+    "missing-module-docstring",
+    "missing-class-docstring",
+    "missing-function-docstring",
+    "too-few-public-methods",
+    "logging-fstring-interpolation",
+    "broad-exception-caught",
+]

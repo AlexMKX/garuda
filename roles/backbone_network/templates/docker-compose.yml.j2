@@ -1,0 +1,29 @@
+services:
+  ospf_injector:
+    restart: always
+    image: garuda/ospf-injector:latest
+    # network_mode: none — the operator creates backbone/border networks itself
+    # through the Docker API on startup (see frr_injector/main.py and
+    # network_manager/runtime.py). Attaching the operator to any network it is
+    # supposed to create re-introduces the bootstrap chicken-and-egg.
+    network_mode: "none"
+    pid: "host"
+    privileged: true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - {{ backbone_dir }}/config.yml:/etc/frr-injector/config.yml:ro
+    environment:
+      - "FRR_INJECTOR_CONFIG=/etc/frr-injector/config.yml"
+{% if ospf_injector_networks is defined and ospf_injector_networks %}
+      - "OPERATOR_NETWORKS={{ ospf_injector_networks | to_json }}"
+{% endif %}
+    healthcheck:
+      # The HealthServer endpoint flips to 200 only after NetworkManager
+      # has finished ensure_all(), which is the exact condition downstream
+      # compose stacks need before they can attach to the shared networks
+      # as external. `docker compose up --wait` gates on this.
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+      start_period: 10s

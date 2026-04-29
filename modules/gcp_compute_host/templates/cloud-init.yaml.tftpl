@@ -1,0 +1,13 @@
+#cloud-config
+%{ if data_disk_enabled ~}
+fs_setup:
+  - label: garuda-data
+    filesystem: ext4
+    device: /dev/disk/by-id/google-garuda-data
+    overwrite: false
+mounts:
+  - [ /dev/disk/by-id/google-garuda-data, /opt/garuda, ext4, "defaults,nofail,x-systemd.makefs", "0", "2" ]
+runcmd:
+  - mkdir -p /opt/garuda
+  - mount -a
+%{ endif ~}

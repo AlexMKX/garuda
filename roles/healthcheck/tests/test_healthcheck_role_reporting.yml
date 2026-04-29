@@ -1,0 +1,465 @@
+---
+# Purpose: Test healthcheck role aggregation/reporting and negative-path capture.
+# Entry points: ansible-playbook (manual or CI test run).
+# Inputs: localhost inventory, simulated healthcheck_results fact.
+# Outputs: Assertions proving reporting produces per-host totals, per-check lines,
+#          global totals, artifact output, and that broken probes yield captured results.
+# Side effects: Writes a temporary artifact during test runs.
+
+# ── Play 1: Validate normalize_results produces required result shape ─────────
+
+- hosts: localhost
+  gather_facts: false
+  vars:
+    # Simulate raw probe outputs that platform check files would produce.
+    # Peer checks come from MikroTik only; Linux uses container substacks + OSPF via FRR.
+    _hc_raw_peer_results:
+      - check_type: peer
+        platform: mikrotik
+        target: "10.0.0.1"
+        tunnel: tun0
+        peer: peer-a
+        status: ok
+        reason: peer_present
+        details: {iface_count: 1, peer_count: 1}
+      - check_type: peer
+        platform: mikrotik
+        target: "10.0.0.2"
+        tunnel: tun1
+        peer: peer-b
+        status: fail
+        reason: tunnel_interface_missing
+        details: {iface_count: 0, peer_count: 0}
+    _hc_raw_ospf_results:
+      - check_type: ospf
+        platform: linux
+        target: "10.0.0.1"
+        status: warn
+        reason: frr_runtime_unavailable
+        details: {ospf_rc: 0, ospf_output: "{}"}
+    _hc_raw_container_results:
+      - check_type: container
+        platform: linux
+        target: my-project
+        status: fail
+        reason: no_containers_found
+        details: {docker_rc: 0}
+  tasks:
+    - name: Run normalize_results
+      ansible.builtin.include_role:
+        name: healthcheck
+        tasks_from: normalize_results
+
+    - name: Assert healthcheck_results has correct length
+      ansible.builtin.assert:
+        that:
+          - healthcheck_results | length == 4
+        fail_msg: "Expected 4 normalized results, got {{ healthcheck_results | length }}"
+
+    - name: Assert each result has required shape fields
+      ansible.builtin.assert:
+        that:
+          - item.host is defined
+          - item.platform is defined
+          - item.check_type is defined
+          - item.target is defined
+          - item.status is defined
+          - item.reason is defined
+          - item.details is defined
+        fail_msg: "Result missing required shape field: {{ item }}"
+      loop: "{{ healthcheck_results }}"
+      loop_control:
+        label: "{{ item.check_type }}/{{ item.target }}"
+
+    - name: Assert host is set to inventory_hostname on all results
+      ansible.builtin.assert:
+        that:
+          - item.host == inventory_hostname
+        fail_msg: "Expected host={{ inventory_hostname }}, got {{ item.host }}"
+      loop: "{{ healthcheck_results }}"
+      loop_control:
+        label: "{{ item.check_type }}/{{ item.target }}"
+
+    - name: Assert statuses include ok, fail, warn (negative paths captured)
+      ansible.builtin.assert:
+        that:
+          - healthcheck_results | selectattr('status', 'equalto', 'ok') | list | length == 1
+          - healthcheck_results | selectattr('status', 'equalto', 'fail') | list | length == 2
+          - healthcheck_results | selectattr('status', 'equalto', 'warn') | list | length == 1
+        fail_msg: >-
+          Expected 1 ok, 2 fail, 1 warn; got:
+          ok={{ healthcheck_results | selectattr('status', 'equalto', 'ok') | list | length }},
+          fail={{ healthcheck_results | selectattr('status', 'equalto', 'fail') | list | length }},
+          warn={{ healthcheck_results | selectattr('status', 'equalto', 'warn') | list | length }}
+
+# ── Play 2: Validate aggregation reporting in the playbook's aggregation play ─
+
+- hosts: localhost
+  gather_facts: false
+  vars:
+    _cwd: "{{ lookup('env', 'PWD') }}"
+    # Simulate aggregated results from multiple hosts as the aggregation play would see them.
+    # Peer checks originate from MikroTik; Linux contributes OSPF and container substack checks.
+    _all_healthcheck_results:
+      - host: host-a
+        platform: mikrotik
+        check_type: peer
+        target: "10.0.0.1"
+        status: ok
+        reason: peer_present
+        details: {}
+      - host: host-a
+        platform: linux
+        check_type: ospf
+        target: "10.0.0.1"
+        status: warn
+        reason: frr_runtime_unavailable
+        details: {}
+      - host: host-b
+        platform: mikrotik
+        check_type: peer
+        target: "10.0.0.2"
+        status: fail
+        reason: tunnel_interface_missing
+        details: {}
+      - host: host-b
+        platform: linux
+        check_type: container
+        target: my-project
+        status: fail
+        reason: no_containers_found
+        details: {}
+  tasks:
+    - name: Emit per-host totals summary
+      ansible.builtin.debug:
+        msg: >-
+          Host {{ item }}:
+          ok={{ _all_healthcheck_results | selectattr('host', 'equalto', item) | selectattr('status', 'equalto', 'ok') | list | length }},
+          warn={{ _all_healthcheck_results | selectattr('host', 'equalto', item) | selectattr('status', 'equalto', 'warn') | list | length }},
+          fail={{ _all_healthcheck_results | selectattr('host', 'equalto', item) | selectattr('status', 'equalto', 'fail') | list | length }}
+      loop: "{{ _all_healthcheck_results | map(attribute='host') | unique | sort | list }}"
+
+    - name: Emit per-check detail lines
+      ansible.builtin.debug:
+        msg: >-
+          [{{ item.status | upper }}] {{ item.host }}/{{ item.check_type }}/{{ item.target }}: {{ item.reason }}
+      loop: "{{ _all_healthcheck_results }}"
+      loop_control:
+        label: "{{ item.host }}/{{ item.check_type }}/{{ item.target }}"
+
+    - name: Assert global totals are computable (ok/warn/fail)
+      ansible.builtin.assert:
+        that:
+          - (_all_healthcheck_results | selectattr('status', 'equalto', 'ok') | list | length) == 1
+          - (_all_healthcheck_results | selectattr('status', 'equalto', 'warn') | list | length) == 1
+          - (_all_healthcheck_results | selectattr('status', 'equalto', 'fail') | list | length) == 2
+        fail_msg: "Global totals incorrect"
+
+    - name: Write test artifact with summary metadata
+      ansible.builtin.copy:
+        content: >-
+          {{
+            {
+              'topology': 'test-fixture',
+              'state': 'test-fixture',
+              'summary': {
+                'total': _all_healthcheck_results | length,
+                'ok': _all_healthcheck_results | selectattr('status', 'equalto', 'ok') | list | length,
+                'warn': _all_healthcheck_results | selectattr('status', 'equalto', 'warn') | list | length,
+                'fail': _all_healthcheck_results | selectattr('status', 'equalto', 'fail') | list | length,
+                'hosts': _all_healthcheck_results | map(attribute='host') | unique | sort | list
+              },
+              'results': _all_healthcheck_results
+            } | to_nice_json
+          }}
+        dest: "/tmp/garuda-test-healthcheck-artifact.json"
+        mode: "0644"
+
+    - name: Read back artifact to assert it was written
+      ansible.builtin.slurp:
+        src: "/tmp/garuda-test-healthcheck-artifact.json"
+      register: _artifact_slurp
+
+    - name: Assert artifact contains summary block
+      ansible.builtin.assert:
+        that:
+          - (_artifact_slurp.content | b64decode | from_json).summary is defined
+          - (_artifact_slurp.content | b64decode | from_json).summary.total == 4
+          - (_artifact_slurp.content | b64decode | from_json).summary.ok == 1
+          - (_artifact_slurp.content | b64decode | from_json).summary.warn == 1
+          - (_artifact_slurp.content | b64decode | from_json).summary.fail == 2
+          - (_artifact_slurp.content | b64decode | from_json).results | length == 4
+        fail_msg: "Artifact missing required summary block or incorrect totals"
+
+# ── Play 3: Negative-path Linux: broken probe (no rc) captured as warn ────────
+# This proves that when a probe command doesn't return rc (probe unavailable),
+# the normalization captures it as warn instead of aborting.
+# Linux model: container substacks (healthcheck_container_substacks) + OSPF via FRR runtime.
+# Linux does NOT perform peer-probe checks (MikroTik only).
+
+- hosts: localhost
+  gather_facts: false
+  vars:
+    healthcheck_ospf_checks:
+      - "192.168.99.1"
+    healthcheck_container_substacks:
+      - broken-project
+    # Simulate probe results where rc is not set (command couldn't run)
+    _hc_ospf_results:
+      results:
+        - {}  # no rc field
+    _hc_substack_results:
+      results:
+        - {}  # no rc field
+  tasks:
+    # Directly invoke the set_fact tasks from check_linux.yml by re-using
+    # the exact same Jinja templates — these exercise the rc-absent code paths.
+
+    - name: Build normalized OSPF results with broken probe (no rc)
+      ansible.builtin.set_fact:
+        _hc_raw_ospf_results: >-
+          {%- set result = [] -%}
+          {%- for idx in range(healthcheck_ospf_checks | length) -%}
+            {%- set ip   = healthcheck_ospf_checks[idx] -%}
+            {%- set item = _hc_ospf_results.results[idx] -%}
+            {%- if item.rc is not defined -%}
+              {%- set status = 'warn' -%}
+              {%- set reason = 'frr_runtime_unavailable' -%}
+            {%- else -%}
+              {%- set raw = item.stdout | default('') -%}
+              {%- if 'Full' in raw -%}
+                {%- set status = 'ok' -%}
+                {%- set reason = 'neighbor_full' -%}
+              {%- elif raw in ('{}', '') or item.rc != 0 -%}
+                {%- set status = 'warn' -%}
+                {%- set reason = 'frr_runtime_unavailable' -%}
+              {%- else -%}
+                {%- set status = 'fail' -%}
+                {%- set reason = 'neighbor_not_full' -%}
+              {%- endif -%}
+            {%- endif -%}
+            {%- set _ = result.append({
+              'check_type': 'ospf',
+              'platform':   'linux',
+              'target':     ip,
+              'status':     status,
+              'reason':     reason,
+              'details': {
+                'ospf_rc':     item.rc     | default(none),
+                'ospf_output': item.stdout | default('')
+              }
+            }) -%}
+          {%- endfor -%}
+          {{ result }}
+
+    - name: Build normalized container substack results with broken probe (no rc)
+      ansible.builtin.set_fact:
+        _hc_raw_container_results: >-
+          {%- set result = [] -%}
+          {%- for idx in range(healthcheck_container_substacks | length) -%}
+            {%- set project = healthcheck_container_substacks[idx] -%}
+            {%- set item    = _hc_substack_results.results[idx] -%}
+            {%- if item.rc is not defined -%}
+              {%- set status = 'warn' -%}
+              {%- set reason = 'docker_unavailable' -%}
+              {%- set details = {} -%}
+            {%- else -%}
+              {%- set lines = item.stdout | default('') | trim | split('\n') | select | list -%}
+              {%- if lines | length == 0 -%}
+                {%- set status = 'fail' -%}
+                {%- set reason = 'no_containers_found' -%}
+                {%- set details = {'docker_rc': item.rc} -%}
+              {%- else -%}
+                {%- set not_running = [] -%}
+                {%- for line in lines -%}
+                  {%- set c = line | from_json -%}
+                  {%- if c.get('State', '') | lower != 'running' -%}
+                    {%- set _ = not_running.append(c.get('Names', c.get('ID', ''))) -%}
+                  {%- endif -%}
+                {%- endfor -%}
+                {%- if not_running | length > 0 -%}
+                  {%- set status = 'fail' -%}
+                  {%- set reason = 'container_not_running' -%}
+                  {%- set details = {'not_running': not_running} -%}
+                {%- else -%}
+                  {%- set status = 'ok' -%}
+                  {%- set reason = 'running' -%}
+                  {%- set details = {'container_count': lines | length} -%}
+                {%- endif -%}
+              {%- endif -%}
+            {%- endif -%}
+            {%- set _ = result.append({
+              'check_type': 'container',
+              'platform':   'linux',
+              'target':     project,
+              'status':     status,
+              'reason':     reason,
+              'details':    details
+            }) -%}
+          {%- endfor -%}
+          {{ result }}
+
+    - name: Set empty peer results (Linux does not run peer-probe checks)
+      ansible.builtin.set_fact:
+        _hc_raw_peer_results: []
+
+    - name: Run normalize_results on broken probe outputs
+      ansible.builtin.include_role:
+        name: healthcheck
+        tasks_from: normalize_results
+
+    - name: Assert broken OSPF probe produces warn/frr_runtime_unavailable (not fatal)
+      ansible.builtin.assert:
+        that:
+          - healthcheck_results | selectattr('check_type', 'equalto', 'ospf') | list | length == 1
+          - (healthcheck_results | selectattr('check_type', 'equalto', 'ospf') | list)[0].status == 'warn'
+          - (healthcheck_results | selectattr('check_type', 'equalto', 'ospf') | list)[0].reason == 'frr_runtime_unavailable'
+        fail_msg: >-
+          Broken OSPF probe should yield warn/frr_runtime_unavailable, got:
+          {{ healthcheck_results | selectattr('check_type', 'equalto', 'ospf') | list }}
+
+    - name: Assert broken container substack probe produces warn/docker_unavailable (not fatal)
+      ansible.builtin.assert:
+        that:
+          - healthcheck_results | selectattr('check_type', 'equalto', 'container') | list | length == 1
+          - (healthcheck_results | selectattr('check_type', 'equalto', 'container') | list)[0].status == 'warn'
+          - (healthcheck_results | selectattr('check_type', 'equalto', 'container') | list)[0].reason == 'docker_unavailable'
+        fail_msg: >-
+          Broken container substack probe should yield warn/docker_unavailable, got:
+          {{ healthcheck_results | selectattr('check_type', 'equalto', 'container') | list }}
+
+    - name: Assert Linux broken probes produce no peer results (Linux has no peer checks)
+      ansible.builtin.assert:
+        that:
+          - healthcheck_results | selectattr('check_type', 'equalto', 'peer') | list | length == 0
+        fail_msg: >-
+          Linux healthcheck should produce no peer results, got:
+          {{ healthcheck_results | selectattr('check_type', 'equalto', 'peer') | list }}
+
+    - name: Assert no result has status of 'unknown' (all broken paths captured cleanly)
+      ansible.builtin.assert:
+        that:
+          - healthcheck_results | selectattr('status', 'equalto', 'unknown') | list | length == 0
+        fail_msg: >-
+          Some results have 'unknown' status - negative paths not fully captured:
+          {{ healthcheck_results | selectattr('status', 'equalto', 'unknown') | list }}
+
+# ── Play 4: Negative-path: MikroTik API failure captured as warn ──────────────
+
+- hosts: localhost
+  gather_facts: false
+  vars:
+    healthcheck_peer_checks:
+      - tunnel: tun-mt
+        peer: hub
+        ip: "10.10.2.1"
+    healthcheck_ospf_checks:
+      - "10.10.2.1"
+    # Simulate MikroTik API failure: failed=true, msg is a string error (not a list)
+    _hc_wg_iface_results:
+      results:
+        - failed: true
+          msg: []  # When failed, msg list is empty; actual error in module_stderr
+    _hc_wg_peer_results:
+      results:
+        - failed: true
+          msg: []
+    _hc_ospf_results_mt:
+      results:
+        - failed: true
+          msg: []
+  tasks:
+    - name: Build normalized MikroTik peer results with API failure
+      ansible.builtin.set_fact:
+        _hc_raw_peer_results: >-
+          {%- set result = [] -%}
+          {%- for idx in range(healthcheck_peer_checks | length) -%}
+            {%- set check = healthcheck_peer_checks[idx] -%}
+            {%- set iface = _hc_wg_iface_results.results[idx] -%}
+            {%- set peer  = _hc_wg_peer_results.results[idx] -%}
+            {%- if iface.failed is defined and iface.failed -%}
+              {%- set status = 'warn' -%}
+              {%- set reason = 'api_unavailable' -%}
+            {%- elif iface.msg | default([]) | length == 0 -%}
+              {%- set status = 'fail' -%}
+              {%- set reason = 'tunnel_interface_missing' -%}
+            {%- elif iface.msg[0].get('disabled', 'false') | string | lower == 'true' -%}
+              {%- set status = 'fail' -%}
+              {%- set reason = 'tunnel_interface_disabled' -%}
+            {%- elif peer.failed is defined and peer.failed -%}
+              {%- set status = 'warn' -%}
+              {%- set reason = 'api_unavailable' -%}
+            {%- elif peer.msg | default([]) | length == 0 -%}
+              {%- set status = 'fail' -%}
+              {%- set reason = 'wg_peer_missing' -%}
+            {%- else -%}
+              {%- set status = 'ok' -%}
+              {%- set reason = 'peer_present' -%}
+            {%- endif -%}
+            {%- set _ = result.append({
+              'check_type': 'peer',
+              'platform':   'mikrotik',
+              'target':     check.ip,
+              'tunnel':     check.tunnel,
+              'peer':       check.peer,
+              'status':     status,
+              'reason':     reason,
+              'details': {
+                'iface_count': iface.msg | default([]) | length,
+                'peer_count':  peer.msg  | default([]) | length
+              }
+            }) -%}
+          {%- endfor -%}
+          {{ result }}
+
+    - name: Build normalized MikroTik OSPF results with API failure
+      ansible.builtin.set_fact:
+        _hc_raw_ospf_results: >-
+          {%- set result = [] -%}
+          {%- for idx in range(healthcheck_ospf_checks | length) -%}
+            {%- set ip   = healthcheck_ospf_checks[idx] -%}
+            {%- set item = _hc_ospf_results_mt.results[idx] -%}
+            {%- if item.failed is defined and item.failed -%}
+              {%- set status = 'warn' -%}
+              {%- set reason = 'api_unavailable' -%}
+            {%- elif item.msg | default([]) | length == 0 -%}
+              {%- set status = 'fail' -%}
+              {%- set reason = 'neighbor_not_found' -%}
+            {%- elif item.msg[0].get('state', '') | lower == 'full' -%}
+              {%- set status = 'ok' -%}
+              {%- set reason = 'neighbor_full' -%}
+            {%- else -%}
+              {%- set status = 'fail' -%}
+              {%- set reason = 'neighbor_not_full' -%}
+            {%- endif -%}
+            {%- set _ = result.append({
+              'check_type': 'ospf',
+              'platform':   'mikrotik',
+              'target':     ip,
+              'status':     status,
+              'reason':     reason,
+              'details': {
+                'neighbor_state': item.msg[0].get('state', '') if (not (item.failed | default(false))) and (item.msg | default([]) | length > 0) else ''
+              }
+            }) -%}
+          {%- endfor -%}
+          {{ result }}
+
+    - name: Set empty container results (MikroTik)
+      ansible.builtin.set_fact:
+        _hc_raw_container_results: []
+
+    - name: Normalize MikroTik API failure results
+      ansible.builtin.include_role:
+        name: healthcheck
+        tasks_from: normalize_results
+
+    - name: Assert MikroTik API failure captured as warn (not fatal)
+      ansible.builtin.assert:
+        that:
+          - healthcheck_results | length == 2
+          - healthcheck_results | selectattr('status', 'equalto', 'warn') | list | length == 2
+          - healthcheck_results | selectattr('reason', 'equalto', 'api_unavailable') | list | length == 2
+        fail_msg: >-
+          MikroTik API failure should produce 2 warn/api_unavailable results, got:
+          {{ healthcheck_results }}

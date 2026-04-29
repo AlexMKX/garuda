@@ -1,0 +1,185 @@
+---
+# Purpose: Real MikroTik healthcheck probes for peer presence, interface state, and OSPF adjacency.
+# Entry points: Included from tasks/main.yml on MikroTik hosts.
+# Inputs: healthcheck_peer_checks, healthcheck_ospf_checks.
+# Outputs: _hc_raw_peer_results, _hc_raw_ospf_results, _hc_raw_container_results facts.
+# Side effects: None (read-only RouterOS API queries; failures captured, never fatal).
+# Note: container_checks not applicable for MikroTik; _hc_raw_container_results set to [].
+# Note: All API calls delegate to localhost; RouterOS uses the community.routeros.api module.
+
+# ── Peer and OSPF checks ──────────────────────────────────────────────────────
+# Probes run inside a single delegate_to+module_defaults block so credentials
+# are declared once (matching the wireguard/routing role convention).
+# Two sub-probes per peer: WireGuard interface state, WireGuard peer presence.
+# Connectivity probing via ping is not reliably accessible over RouterOS API;
+# absence of a peer entry or a disabled interface produces 'fail'.
+
+- name: Run MikroTik RouterOS API healthcheck probes
+  delegate_to: localhost
+  module_defaults:
+    group/community.routeros.api:
+      hostname: "{{ hostvars[inventory_hostname].ansible_host | default(inventory_hostname) }}"
+      username: "{{ hostvars[inventory_hostname].ansible_user | default(hostvars[inventory_hostname].ansible_ssh_user) }}"
+      password: "{{ hostvars[inventory_hostname].ansible_password | default(hostvars[inventory_hostname].ansible_ssh_pass) }}"
+      tls: true
+      validate_certs: "{{ routeros_validate_certs | default(true) }}"
+      validate_cert_hostname: "{{ routeros_validate_certs | default(true) }}"
+  block:
+    - name: Query WireGuard interface state (MikroTik)
+      community.routeros.api:
+        path: interface wireguard
+        extended_query:
+          attributes: [".id", "name", "disabled", "running", "comment"]
+          where:
+            - attribute: name
+              is: "=="
+              value: "{{ item.tunnel }}"
+      loop: "{{ healthcheck_peer_checks }}"
+      loop_control:
+        label: "{{ item.tunnel }}"
+      register: _hc_wg_iface_results
+      failed_when: false
+      changed_when: false
+
+    - name: Query WireGuard peer presence (MikroTik)
+      community.routeros.api:
+        path: interface wireguard peers
+        extended_query:
+          attributes: [".id", "interface", "public-key", "disabled"]
+          where:
+            - attribute: interface
+              is: "=="
+              value: "{{ item.tunnel }}"
+      loop: "{{ healthcheck_peer_checks }}"
+      loop_control:
+        label: "{{ item.tunnel }}"
+      register: _hc_wg_peer_results
+      failed_when: false
+      changed_when: false
+
+    - name: Query OSPF neighbor state (MikroTik)
+      community.routeros.api:
+        path: routing ospf neighbor
+        extended_query:
+          attributes: [".id", "address", "state", "instance"]
+          where:
+            - attribute: address
+              is: "=="
+              value: "{{ item }}"
+      loop: "{{ healthcheck_ospf_checks }}"
+      loop_control:
+        label: "{{ item }}"
+      register: _hc_ospf_results
+      failed_when: false
+      changed_when: false
+
+  rescue:
+    # If the entire API block fails (e.g., collection unavailable, connection refused),
+    # synthesize warning-sentinel results so normalization still produces captured outputs.
+    - name: Capture block-level API failure as warn sentinels (MikroTik)
+      ansible.builtin.set_fact:
+        _hc_wg_iface_results:
+          results: >-
+            {%- set s = [] -%}
+            {%- for _ in healthcheck_peer_checks -%}
+              {%- set _ = s.append({'failed': true, 'msg': []}) -%}
+            {%- endfor -%}
+            {{ s }}
+        _hc_wg_peer_results:
+          results: >-
+            {%- set s = [] -%}
+            {%- for _ in healthcheck_peer_checks -%}
+              {%- set _ = s.append({'failed': true, 'msg': []}) -%}
+            {%- endfor -%}
+            {{ s }}
+        _hc_ospf_results:
+          results: >-
+            {%- set s = [] -%}
+            {%- for _ in healthcheck_ospf_checks -%}
+              {%- set _ = s.append({'failed': true, 'msg': []}) -%}
+            {%- endfor -%}
+            {{ s }}
+
+- name: Build normalized peer results (MikroTik)
+  ansible.builtin.set_fact:
+    _hc_raw_peer_results: >-
+      {%- set result = [] -%}
+      {%- for idx in range(healthcheck_peer_checks | length) -%}
+        {%- set check = healthcheck_peer_checks[idx] -%}
+        {%- set iface = _hc_wg_iface_results.results[idx] -%}
+        {%- set peer  = _hc_wg_peer_results.results[idx] -%}
+        {%- if iface.failed is defined and iface.failed -%}
+          {%- set status = 'warn' -%}
+          {%- set reason = 'api_unavailable' -%}
+        {%- elif iface.msg | default([]) | length == 0 -%}
+          {%- set status = 'fail' -%}
+          {%- set reason = 'tunnel_interface_missing' -%}
+        {%- elif iface.msg[0].get('disabled', 'false') | string | lower == 'true' -%}
+          {%- set status = 'fail' -%}
+          {%- set reason = 'tunnel_interface_disabled' -%}
+        {%- elif peer.failed is defined and peer.failed -%}
+          {%- set status = 'warn' -%}
+          {%- set reason = 'api_unavailable' -%}
+        {%- elif peer.msg | default([]) | length == 0 -%}
+          {%- set status = 'fail' -%}
+          {%- set reason = 'wg_peer_missing' -%}
+        {%- else -%}
+          {%- set status = 'ok' -%}
+          {%- set reason = 'peer_present' -%}
+        {%- endif -%}
+        {%- set _ = result.append({
+          'check_type': 'peer',
+          'platform':   'mikrotik',
+          'target':     check.ip,
+          'tunnel':     check.tunnel,
+          'peer':       check.peer,
+          'status':     status,
+          'reason':     reason,
+          'details': {
+            'iface_count': iface.msg | default([]) | length,
+            'peer_count':  peer.msg  | default([]) | length
+          }
+        }) -%}
+      {%- endfor -%}
+      {{ result }}
+
+# ── OSPF neighbor checks ──────────────────────────────────────────────────────
+# Queries RouterOS OSPF neighbor table; state 'full' means adjacency converged.
+
+- name: Build normalized OSPF results (MikroTik)
+  ansible.builtin.set_fact:
+    _hc_raw_ospf_results: >-
+      {%- set result = [] -%}
+      {%- for idx in range(healthcheck_ospf_checks | length) -%}
+        {%- set ip   = healthcheck_ospf_checks[idx] -%}
+        {%- set item = _hc_ospf_results.results[idx] -%}
+        {%- if item.failed is defined and item.failed -%}
+          {%- set status = 'warn' -%}
+          {%- set reason = 'api_unavailable' -%}
+        {%- elif item.msg | default([]) | length == 0 -%}
+          {%- set status = 'fail' -%}
+          {%- set reason = 'neighbor_not_found' -%}
+        {%- elif item.msg[0].get('state', '') | lower == 'full' -%}
+          {%- set status = 'ok' -%}
+          {%- set reason = 'neighbor_full' -%}
+        {%- else -%}
+          {%- set status = 'fail' -%}
+          {%- set reason = 'neighbor_not_full' -%}
+        {%- endif -%}
+        {%- set _ns = item.msg[0].get('state', '') if (not (item.failed | default(false))) and (item.msg | default([]) | length > 0) else '' -%}
+        {%- set _ = result.append({
+          'check_type': 'ospf',
+          'platform':   'mikrotik',
+          'target':     ip,
+          'status':     status,
+          'reason':     reason,
+          'details': {
+            'neighbor_state': _ns
+          }
+        }) -%}
+      {%- endfor -%}
+      {{ result }}
+
+- name: Set empty container results (MikroTik does not run containers)
+  ansible.builtin.set_fact:
+    _hc_raw_container_results: []

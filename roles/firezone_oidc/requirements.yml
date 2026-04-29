@@ -1,0 +1,14 @@
+---
+# Purpose: Collection dependencies for roles/firezone_oidc.
+# Entry points: Install with `ansible-galaxy collection install -r requirements.yml`
+#               before running this role outside a pre-provisioned environment.
+# Inputs: None.
+# Outputs: Collections installed to the active Ansible collections path.
+# Side effects: None.
+# Tags: n/a.
+
+collections:
+  - name: community.docker
+    type: galaxy
+  - name: ansible.utils
+    type: galaxy

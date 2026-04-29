@@ -1,0 +1,25 @@
+---
+- name: Hello from test role
+  ansible.builtin.debug:
+    msg: "Hello, {{ greeting | default('world') }}!"
+
+- name: Render greeting template
+  ansible.builtin.debug:
+    msg: "{{ lookup('ansible.builtin.template', 'hello.txt.j2') }}"
+
+- name: Write structured test outputs
+  ansible.builtin.copy:
+    dest: "{{ workload_result_path }}"
+    mode: "0600"
+    content: |
+      {{
+        {
+          'outputs': {
+            'greeting': greeting | default('world'),
+            'overridable_key': 'from-role',
+            'shape': {'kind': workload_kind | default('unknown')}
+          }
+        } | to_nice_json
+      }}
+  become: false
+  when: workload_result_path | default('') | length > 0

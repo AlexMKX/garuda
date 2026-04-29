@@ -1,0 +1,87 @@
+---
+# Purpose: Provision Docker prerequisites on a Linux host.
+# Entry points: Invoked by modules/linux_apply dispatcher via tasks_from=provision.
+# Inputs: docker_daemon_config (optional map — daemon.json content),
+#         reboot_on_change (optional bool, default true).
+
+# 4 GiB /swapfile on the root partition. Cloud baseline: memory is a
+# paid resource, disk wear on managed NVMe is the hypervisor's problem.
+# Persisted via fstab so swap is re-activated on every boot.
+# See docs/superpowers/specs/2026-04-22-linux-host-prerequisites-swap-design.md
+- name: Probe /swapfile existence to gate allocation
+  ansible.builtin.stat:
+    path: /swapfile
+    get_attributes: false
+    get_checksum: false
+    get_mime: false
+  register: swapfile_stat
+
+- name: Allocate 4 GiB /swapfile when absent
+  ansible.builtin.command: fallocate -l 4G /swapfile
+  when: not swapfile_stat.stat.exists
+  changed_when: true
+
+- name: Enforce secure permissions on /swapfile
+  ansible.builtin.file:
+    path: /swapfile
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Format /swapfile as swap when freshly allocated
+  ansible.builtin.command: mkswap /swapfile
+  when: not swapfile_stat.stat.exists
+  changed_when: true
+
+- name: Inspect currently active swap devices
+  ansible.builtin.command: swapon --show=NAME --noheadings
+  register: swapfile_active
+  changed_when: false
+
+- name: Activate /swapfile when not already active
+  ansible.builtin.command: swapon /swapfile
+  when: "'/swapfile' not in swapfile_active.stdout_lines | map('trim') | list"
+  changed_when: true
+
+- name: Persist /swapfile in /etc/fstab for reboot survival
+  ansible.posix.mount:
+    name: none
+    src: /swapfile
+    fstype: swap
+    opts: sw
+    dump: '0'
+    passno: '0'
+    state: present
+
+- name: Gather facts required by Docker prerequisites role
+  ansible.builtin.setup:
+    gather_subset:
+      - min
+
+# Docker 29+ refuses to start when net.ipv4.ip_forward=0 even with
+# "ip-forward": true in daemon.json (that flag only disables Docker's own
+# forwarding setup; the kernel sysctl must still be enabled for the default
+# bridge network to initialize). Persist the setting so it survives reboots.
+- name: Enable IPv4 forwarding required by Docker bridge networks
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    state: present
+    reload: true
+    sysctl_file: /etc/sysctl.d/99-garuda-linux_host_prerequisites.conf
+
+- name: Apply Docker prerequisites via geerlingguy.docker
+  ansible.builtin.include_role:
+    name: geerlingguy.docker
+  vars:
+    docker_daemon_options: "{{ docker_daemon_config | default({}) }}"
+    docker_service_manage: true
+    docker_service_state: started
+
+- name: Reboot host after Docker daemon config change
+  ansible.builtin.reboot:
+    msg: Rebooting after Docker prerequisites update
+    reboot_timeout: 900
+    connect_timeout: 10
+    post_reboot_delay: 10
+  when: reboot_on_change | default(true)

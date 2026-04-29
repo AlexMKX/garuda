@@ -1,0 +1,19 @@
+---
+# Purpose: Test variable set for firezone_oidc role validation playbook.
+# Entry points: Loaded by roles/firezone_oidc/testing/playbooks/play.yml.
+# Inputs: Manual test values for Firezone server URL and OIDC provider config.
+# Outputs: Variable context consumed by firezone_oidc role during test run.
+# Side effects: None; variable definitions only.
+# Tags: n/a.
+
+# Must match fz_server_url used in the firezone play.
+firezone_oidc_server_url: https://oidc.example.com
+
+# Minimal provider config for contract/assert testing only.
+# client_id and client_secret are intentionally placeholder values.
+firezone_oidc_providers:
+  google:
+    client_id: "test-client-id.apps.googleusercontent.com"
+    client_secret: "test-client-secret"
+    label: "Google"
+    discovery_document_uri: "https://accounts.google.com/.well-known/openid-configuration"

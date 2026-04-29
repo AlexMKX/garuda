@@ -1,0 +1,50 @@
+---
+- name: Ensure backbone directory exists
+  ansible.builtin.file:
+    path: "{{ backbone_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Capture backbone role path before include_role
+  ansible.builtin.set_fact:
+    _backbone_role_path: "{{ role_path }}"
+
+- name: Ensure ospf injector image is present on target
+  ansible.builtin.include_role:
+    name: ensure_docker_image
+  vars:
+    ensure_docker_image_name: garuda/ospf-injector:latest
+    ensure_docker_image_build_path: "{{ _backbone_role_path }}/files/ospf_injector"
+
+# frr-sidecar image is consumed by ospf-injector when creating managed sidecars.
+- name: Ensure frr sidecar image is present on target
+  ansible.builtin.include_role:
+    name: ensure_docker_image
+  vars:
+    ensure_docker_image_name: garuda/frr-sidecar:latest
+    ensure_docker_image_build_path: "{{ _backbone_role_path }}/files/frr_sidecar"
+
+- name: Render ospf-injector config
+  ansible.builtin.template:
+    src: ospf-injector.yml.j2
+    dest: "{{ backbone_dir }}/config.yml"
+    mode: "0644"
+
+- name: Render ospf-injector compose file
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: "{{ backbone_dir }}/docker-compose.yml"
+    mode: "0644"
+
+- name: Deploy ospf-injector compose stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ backbone_dir }}"
+    state: present
+    recreate: always
+    # wait: true blocks until the operator healthcheck reports healthy.
+    # The healthcheck hits HealthServer /health which only flips to 200 after
+    # NetworkManager.ensure_all() has created the shared backbone/border
+    # networks. Without this, downstream workload playbooks (firezone,
+    # wireguard, ipt_server) can race the operator and fail `compose up`
+    # with "network backbone_network declared as external but not found".
+    wait: true

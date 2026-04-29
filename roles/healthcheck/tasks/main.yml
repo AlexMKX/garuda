@@ -1,0 +1,19 @@
+---
+# Purpose: Dispatch healthcheck probes by platform and normalize results.
+# Entry points: Role entry file for roles/healthcheck.
+# Inputs: healthcheck_peer_checks (MikroTik), healthcheck_ospf_checks, healthcheck_container_substacks (Linux).
+# Outputs: healthcheck_results fact (list of normalized result dicts).
+# Side effects: None; read-only probes only.
+
+- name: Run Linux healthchecks
+  ansible.builtin.include_tasks: check_linux.yml
+  when: >-
+    hostvars[inventory_hostname].ansible_network_os | default('') != 'community.routeros.routeros'
+
+- name: Run MikroTik healthchecks
+  ansible.builtin.include_tasks: check_mikrotik.yml
+  when: >-
+    hostvars[inventory_hostname].ansible_network_os | default('') == 'community.routeros.routeros'
+
+- name: Normalize results
+  ansible.builtin.include_tasks: normalize_results.yml

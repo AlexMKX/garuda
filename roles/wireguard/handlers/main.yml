@@ -1,0 +1,43 @@
+---
+# Purpose: Define docker-compose handlers for WireGuard role runtime containers.
+# Entry points: Loaded automatically by roles/wireguard.
+# Inputs: Handler notifications and wg_target_dir variable.
+# Outputs: Container restart/reload/check/stop operations.
+# Side effects: Changes WireGuard container lifecycle state.
+# Tags: docker.
+
+- name: Restart wireguard container
+  community.docker.docker_compose_v2:
+    project_src: "{{ wg_target_dir }}"
+    state: restarted
+  when:
+    - wg_target_dir is defined
+  tags: docker
+
+- name: Reload wireguard container
+  community.docker.docker_compose_v2:
+    project_src: "{{ wg_target_dir }}"
+    state: present
+    recreate: always
+  when:
+    - wg_target_dir is defined
+  tags: docker
+
+- name: Check wireguard container
+  community.docker.docker_compose_v2:
+    project_src: "{{ wg_target_dir }}"
+    state: present
+    check_files_existing: true
+  register: container_check
+  changed_when: false
+  when:
+    - wg_target_dir is defined
+  tags: docker
+
+- name: Stop wireguard container
+  community.docker.docker_compose_v2:
+    project_src: "{{ wg_target_dir }}"
+    state: stopped
+  when:
+    - wg_target_dir is defined
+  tags: docker

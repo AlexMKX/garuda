@@ -1,0 +1,10 @@
+{% for line in preamble -%}
+{{ line }}
+{% endfor -%}
+hostname {{ hostname }}
+{% if extra_body %}
+{{ extra_body | trim }}
+{% endif %}
+{{ ospf_block }}
+
+line vty

@@ -1,0 +1,260 @@
+---
+# Purpose: Reconcile OIDC providers on an already-deployed Firezone instance.
+# Entry points: Invoked by modules/linux_apply dispatcher via tasks_from=provision.
+# Inputs: firezone_oidc_server_url (required); firezone_oidc_providers
+#   (required non-empty mapping of provider_key -> provider_config).
+#   firezone_oidc_dir, firezone_oidc_api_url.
+# Outputs: OIDC providers registered via Firezone API.
+# Side effects: Mints a short-lived Firezone API token via
+#   `bin/create-api-token`, PATCHes `/v0/configuration`, deletes the token
+#   in the `always:` block. Worst-case abandoned tokens expire on Firezone's
+#   default token TTL (30 days).
+
+# Managed payload keys — the exact set the Firezone schema accepts and we control.
+# Used to project both desired and current providers onto the same key surface for
+# idempotency comparison, so extra fields returned by the API never trigger false updates.
+# client_secret is excluded from comparison because the GET response returns a masked
+# value that does not equal the real secret.
+#
+# _firezone_oidc_cmp_keys is a role-local convention: underscore prefix signals it is a
+# role-internal constant not intended for caller override.
+- name: Set managed provider keys for idempotency comparison
+  ansible.builtin.set_fact:
+    _firezone_oidc_cmp_keys:
+      - id
+      - label
+      - scope
+      - response_type
+      - client_id
+      - discovery_document_uri
+      - redirect_uri
+      - auto_create_users
+
+- name: Validate required variables
+  ansible.builtin.assert:
+    that:
+      - firezone_oidc_server_url is defined
+      - firezone_oidc_server_url | length > 0
+      - firezone_oidc_providers is defined
+      - firezone_oidc_providers | length > 0
+    fail_msg: >-
+      firezone_oidc provision requires firezone_oidc_server_url and a
+      non-empty firezone_oidc_providers mapping.
+
+- name: Validate each provider has required credentials
+  ansible.builtin.assert:
+    that:
+      - item.value.client_id is defined
+      - item.value.client_id | length > 0
+      - item.value.client_secret is defined
+      - item.value.client_secret | length > 0
+    fail_msg: >-
+      Provider '{{ item.key }}' is missing required field(s).
+      Both client_id and client_secret must be non-empty strings.
+  loop: "{{ firezone_oidc_providers | dict2items }}"
+  no_log: true
+
+# --- Preflight: locate container ---
+
+- name: Ensure Firezone stack is running
+  community.docker.docker_compose_v2:
+    project_src: "{{ firezone_oidc_dir }}"
+    state: present
+    wait: false
+  register: firezone_oidc_compose_result
+  become: true
+
+- name: Fail if Firezone container is not running
+  ansible.builtin.fail:
+    msg: >-
+      Could not locate a running Firezone container in {{ firezone_oidc_dir }}.
+      Ensure roles/firezone has been applied successfully before running this role.
+  when: >-
+    firezone_oidc_compose_result.containers
+    | selectattr('Service', 'equalto', 'firezone')
+    | list
+    | length == 0
+
+- name: Locate Firezone container ID
+  ansible.builtin.set_fact:
+    firezone_oidc_container_id: >-
+      {{ (firezone_oidc_compose_result.containers
+          | selectattr('Service', 'equalto', 'firezone')
+          | list
+          | first)['ID'] }}
+
+# --- Preflight: resolve local API URL ---
+
+- name: Get Firezone container network info (bridge mode)
+  community.docker.docker_container_info:
+    name: "{{ firezone_oidc_container_id }}"
+  register: firezone_oidc_container_info
+  become: true
+  when:
+    - firezone_oidc_api_url is not defined
+
+- name: Set API URL from container bridge IP
+  ansible.builtin.set_fact:
+    # Network name = <basename(firezone_oidc_dir)>_firezone-network (Docker Compose default).
+    # If firezone_oidc_dir changes to a path whose basename differs from "firezone", update this key.
+    firezone_oidc_resolved_api_url: >-
+      http://{{ firezone_oidc_container_info.container.NetworkSettings.Networks['firezone_firezone-network'].IPAddress }}:13000
+  when:
+    - firezone_oidc_api_url is not defined
+
+- name: Set API URL from explicit override
+  ansible.builtin.set_fact:
+    firezone_oidc_resolved_api_url: "{{ firezone_oidc_api_url }}"
+  when: firezone_oidc_api_url is defined
+
+# --- Preflight: verify API reachable ---
+
+- name: Verify Firezone API is reachable (unauthenticated probe)
+  ansible.builtin.uri:
+    url: "{{ firezone_oidc_resolved_api_url }}/v0/configuration"
+    method: GET
+    status_code: [200, 401]
+
+# --- Mint token, reconcile OIDC config, delete token ---
+# The block/always pattern guarantees the minted token is deleted even if
+# a middle step fails. Only an outright kill of the Ansible runner (SSH
+# session crash, OOM, etc.) can leak a token, and Firezone's 30-day TTL
+# bounds the blast radius.
+
+- name: Manage OIDC configuration with a minted API token
+  block:
+    - name: Mint short-lived Firezone API token
+      community.docker.docker_container_exec:
+        container: "{{ firezone_oidc_container_id }}"
+        command: bin/create-api-token
+      register: firezone_oidc_token_result
+      become: true
+      no_log: true
+
+    - name: Normalize minted token value
+      ansible.builtin.set_fact:
+        firezone_oidc_api_token: "{{ firezone_oidc_token_result.stdout_lines[0] | trim }}"
+        firezone_oidc_token_payload_b64: "{{ (firezone_oidc_token_result.stdout_lines[0] | trim).split('.')[1] }}"
+      no_log: true
+
+    - name: Decode token JWT payload
+      ansible.builtin.set_fact:
+        firezone_oidc_token_payload: >-
+          {{
+            (
+              firezone_oidc_token_payload_b64
+              ~ ('=' * ((4 - firezone_oidc_token_payload_b64 | length % 4) % 4))
+            )
+            | b64decode
+            | from_json
+          }}
+      no_log: true
+
+    - name: Record minted token UUID for cleanup
+      ansible.builtin.set_fact:
+        firezone_oidc_token_id: "{{ firezone_oidc_token_payload.api }}"
+      no_log: true
+
+    - name: Initialise desired providers accumulator
+      ansible.builtin.set_fact:
+        firezone_oidc_desired_providers: []
+
+    - name: Build desired openid_connect_providers list
+      ansible.builtin.set_fact:
+        firezone_oidc_desired_providers: >-
+          {{ firezone_oidc_desired_providers + [
+            {
+              'id': item.key,
+              'label': item.value.label | default(item.key, true),
+              'discovery_document_uri': item.value.discovery_document_uri
+                | default('https://accounts.google.com/.well-known/openid-configuration', true),
+              'client_id': item.value.client_id,
+              'client_secret': item.value.client_secret,
+              'redirect_uri': item.value.redirect_uri
+                | default(firezone_oidc_server_url + '/auth/oidc/' + item.key + '/callback', true),
+              'response_type': item.value.response_type | default('code', true),
+              'scope': item.value.scope | default('openid email profile', true),
+              'auto_create_users': item.value.auto_create_users
+                if item.value.auto_create_users is not none else true
+            }
+          ] }}
+      loop: "{{ firezone_oidc_providers | dict2items }}"
+      no_log: true
+
+    - name: Fetch current Firezone configuration
+      ansible.builtin.uri:
+        url: "{{ firezone_oidc_resolved_api_url }}/v0/configuration"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ firezone_oidc_api_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        status_code: [200]
+      register: firezone_oidc_current_config
+      no_log: true
+
+    - name: Normalize providers for idempotency comparison
+      ansible.builtin.set_fact:
+        firezone_oidc_current_normalized: >-
+          {{ firezone_oidc_current_config.json.data.openid_connect_providers
+             | default([])
+             | map('ansible.utils.keep_keys', target=_firezone_oidc_cmp_keys)
+             | list
+             | sort(attribute='id') }}
+        firezone_oidc_desired_normalized: >-
+          {{ firezone_oidc_desired_providers
+             | map('ansible.utils.keep_keys', target=_firezone_oidc_cmp_keys)
+             | list
+             | sort(attribute='id') }}
+      no_log: true
+
+    - name: Determine whether OIDC configuration needs update
+      ansible.builtin.set_fact:
+        firezone_oidc_needs_update: >-
+          {{ firezone_oidc_desired_normalized != firezone_oidc_current_normalized }}
+      no_log: true
+
+    - name: Apply OIDC provider configuration
+      ansible.builtin.uri:
+        url: "{{ firezone_oidc_resolved_api_url }}/v0/configuration"
+        method: PATCH
+        headers:
+          Authorization: "Bearer {{ firezone_oidc_api_token }}"
+          Content-Type: "application/json"
+        body_format: json
+        body:
+          configuration:
+            openid_connect_providers: "{{ firezone_oidc_desired_providers }}"
+        status_code: [200]
+      no_log: true
+      when: firezone_oidc_needs_update
+
+    - name: Report OIDC configuration status
+      ansible.builtin.debug:
+        msg: >-
+          OIDC configuration {{ 'applied (providers updated)' if firezone_oidc_needs_update else 'unchanged (already up to date)' }}.
+          Providers: {{ firezone_oidc_providers | default({}) | list }}
+
+  always:
+    - name: Delete minted Firezone API token
+      community.docker.docker_container_exec:
+        container: "{{ firezone_oidc_container_id }}"
+        command: >-
+          /app/bin/firezone rpc
+          'with {:ok, t} <- FzHttp.ApiTokens.fetch_unexpired_api_token_by_id("{{ firezone_oidc_token_id }}"),
+          do: FzHttp.Repo.delete!(t)'
+      become: true
+      no_log: true
+      when: firezone_oidc_token_id | default('') | length > 0
+
+    - name: Clear sensitive facts
+      ansible.builtin.set_fact:
+        firezone_oidc_api_token: null
+        firezone_oidc_token_id: null
+        firezone_oidc_token_result: null
+        firezone_oidc_token_payload: null
+        firezone_oidc_token_payload_b64: null
+        firezone_oidc_desired_providers: null
+        firezone_oidc_current_config: null
+        firezone_oidc_current_normalized: null
+        firezone_oidc_desired_normalized: null

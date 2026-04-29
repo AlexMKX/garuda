@@ -1,0 +1,8 @@
+---
+backbone_dir: /opt/garuda/backbone
+backbone_subnet: ""
+border_subnet: ""
+# Optional JSON-serializable list of ManagedNetwork overrides passed to the operator via
+# OPERATOR_NETWORKS env var. When empty, the operator uses built-in defaults (backbone_network
+# and border_network). Override entries are merged with defaults by name.
+ospf_injector_networks: []

@@ -1,0 +1,8 @@
+---
+# linux_apply dispatcher compat flag.
+# Stored here (not in meta/main.yml) because Ansible 2.15+ validates
+# meta/main.yml against RoleMetadata._validate_attributes() and rejects
+# unknown top-level keys.
+terraform:
+  linux_apply:
+    compatible: true

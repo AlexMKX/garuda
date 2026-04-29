@@ -1,0 +1,16 @@
+---
+# Purpose: Define default variables for IPT server role deployment paths and routing config.
+# Entry points: Loaded automatically by roles/ipt_server.
+# Inputs: Top-level payload vars from linux_apply executor.
+# Outputs: Defaults consumed by roles/ipt_server/tasks/main.yml.
+# Side effects: None; variable defaults only.
+
+ipt_server_dir: /opt/garuda/ipt_server
+ipt_interfaces: []
+ipt_routes: []
+ipt_nic_attach: ["backbone"]
+ipt_clean_conntrack: false
+ipt_domain_route_ttl: 300
+ipt_server_image: garuda/ipt-server:latest
+ipt_powerdns_image: garuda/powerdns:latest
+ipt_server_labels: {}

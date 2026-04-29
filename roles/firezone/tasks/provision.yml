@@ -1,0 +1,127 @@
+---
+# Purpose: Deploy the Firezone compose stack and bootstrap admin + policies.
+# Entry points: Invoked by modules/linux_apply dispatcher via tasks_from=provision.
+
+- name: Validate admin password when provided
+  ansible.builtin.assert:
+    that: fz_admin_password is not defined or fz_admin_password | length >= 12
+
+- name: Ensure firezone_dir exists
+  ansible.builtin.file:
+    path: "{{ fz_firezone_dir }}"
+    state: directory
+
+- name: Copy files
+  copy:
+    src: "files/"
+    dest: "{{ fz_firezone_dir }}"
+  become: true
+
+- name: Build conntrack-log image
+  community.docker.docker_image:
+    name: local/conntrack-log:latest
+    source: build
+    build:
+      path: "{{ fz_firezone_dir }}/conntrack_log"
+  become: true
+
+- name: Build firezone image
+  community.docker.docker_image:
+    name: "{{ fz_firezone_image }}"
+    source: build
+    build:
+      path: "{{ fz_firezone_dir }}/firezone_image"
+  become: true
+
+- name: Write credentials env file
+  ansible.builtin.template:
+    dest: "{{ fz_firezone_dir }}/credentials.env"
+    src: templates/credentials.env.j2
+    force: no
+
+- name: Write env file
+  ansible.builtin.template:
+    dest: "{{ fz_firezone_dir }}/.env"
+    src: templates/firezone.env.j2
+  notify: restart firezone
+
+- name: Ship firezone-init.sh into compose dir
+  ansible.builtin.copy:
+    dest: "{{ fz_firezone_dir }}/firezone-init.sh"
+    src: firezone-init.sh
+    mode: "0755"
+  notify: restart firezone
+
+- name: Write compose file
+  ansible.builtin.template:
+    dest: "{{ fz_firezone_dir }}/docker-compose.yml"
+    src: "templates/docker-compose.yml.j2"
+  register: fz_compose_file
+  notify: restart firezone
+
+- name: Ensure stack is running
+  community.docker.docker_compose_v2:
+    project_src: "{{ fz_firezone_dir }}"
+    state: present
+    wait: true
+  register: result
+
+# --- Runtime assertions: verify compose stack is healthy ---
+- name: Assert all Firezone compose services are running
+  ansible.builtin.assert:
+    that:
+      - result.containers | length >= 3
+      - result.containers | selectattr('State', 'equalto', 'running') | list | length
+          == result.containers | length
+    fail_msg: >-
+      Firezone compose stack has non-running services:
+      {{ result.containers | map(attribute='State') | list }}
+    success_msg: "All {{ result.containers | length }} Firezone services are running"
+
+- name: Assert no host-era Firezone systemd units are active
+  ansible.builtin.command: systemctl is-active firezone
+  register: _fz_host_unit
+  changed_when: false
+  failed_when: false
+
+- name: Fail if host-era Firezone unit is still active
+  ansible.builtin.assert:
+    that:
+      - _fz_host_unit.rc != 0
+    fail_msg: >-
+      Legacy host-era firezone systemd unit is still active.
+      Disable it before using Docker-managed Firezone.
+    success_msg: "No host-era Firezone systemd unit detected"
+
+- ansible.builtin.set_fact:
+    fz_firezone_container_id: "{{(result.containers | selectattr ('Service', 'equalto', 'firezone') | list | first)['ID']  }}"
+
+- name: Ensure admin account exists
+  community.docker.docker_container_exec:
+    container: "{{ fz_firezone_container_id }}"
+    command: "/app/bin/create-or-reset-admin"
+  changed_when: false
+
+- name: Apply firezone-local policies inside Firezone container
+  community.docker.docker_container_exec:
+    container: "{{ fz_firezone_container_id }}"
+    command: "sh /var/firezone-init/firezone-init.sh"
+  changed_when: false
+
+- name: Clean up temporary facts
+  ansible.builtin.set_fact:
+    fz_firezone_container_id: null
+
+- name: Publish structured Firezone workload outputs
+  ansible.builtin.copy:
+    dest: "{{ workload_result_path }}"
+    content: |
+      {
+        "outputs": {
+          "firezone_dir": {{ fz_firezone_dir | to_json }}
+        }
+      }
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  when: workload_result_path | default('') | length > 0

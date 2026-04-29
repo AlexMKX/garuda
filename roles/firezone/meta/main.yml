@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  author: Alex MK
+  description: Deploy the Firezone compose stack and bootstrap admin + policies.
+  license: GPL-2.0-or-later
+  min_ansible_version: "2.15"
+  galaxy_tags: []
+
+dependencies:
+  - role: common

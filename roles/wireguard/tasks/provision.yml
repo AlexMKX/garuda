@@ -1,0 +1,170 @@
+---
+# Purpose: Provision WireGuard tunnel runtime on a Linux host using Docker.
+# Entry points: Invoked by modules/linux_apply dispatcher via tasks_from=provision.
+# Inputs: wireguard_tunnel_name (or wireguard_interface_name fallback),
+#         wireguard_interface_name, wireguard_address, wireguard_private_key,
+#         wireguard_table, wireguard_peer_public_key, wireguard_peer_allowed_ips,
+#         wireguard_mesh_root, wireguard_image, wireguard_ops_root.
+# Outputs: wireguard_compose_file, wireguard_compose_project facts.
+# Side effects: Builds/delivers docker image, renders config, converges compose stack.
+
+- name: Normalize tunnel name for filesystem paths
+  ansible.builtin.set_fact:
+    wireguard_tunnel_name: "{{ wireguard_tunnel_name | default(wireguard_interface_name) }}"
+  when:
+    - wireguard_tunnel_name is not defined
+    - wireguard_interface_name is defined
+
+- name: Validate provision-mode required variables
+  ansible.builtin.assert:
+    that:
+      - wireguard_tunnel_name is defined
+      - wireguard_interface_name is defined
+      - wireguard_address is defined
+      - wireguard_private_key is defined
+      - wireguard_table is defined
+      - wireguard_peer_public_key is defined
+      - wireguard_peer_allowed_ips is defined
+    quiet: true
+    fail_msg: |
+      Wireguard provision requires:
+      - wireguard_tunnel_name (or wireguard_interface_name fallback)
+      - wireguard_interface_name
+      - wireguard_address
+      - wireguard_private_key
+      - wireguard_table
+      - wireguard_peer_public_key
+      - wireguard_peer_allowed_ips
+
+- name: Set host configuration
+  ansible.builtin.set_fact:
+    wg_target_dir: "{{ wireguard_mesh_root }}/{{ wireguard_tunnel_name }}"
+    wg_compose_file: "{{ wireguard_mesh_root }}/{{ wireguard_tunnel_name }}/docker-compose.yml"
+    _wireguard_build_path: "{{ role_path }}/files/wireguard"
+
+- name: Ensure WireGuard image is loaded on target
+  ansible.builtin.include_role:
+    name: ensure_docker_image
+  vars:
+    ensure_docker_image_name: "{{ wireguard_image }}"
+    ensure_docker_image_build_path: "{{ _wireguard_build_path }}"
+
+- name: Apply WireGuard configuration
+  become: true
+  block:
+    - name: Ensure Docker is available
+      community.docker.docker_host_info:
+      register: docker_host_info
+      changed_when: false
+
+    - name: Create WireGuard target directory
+      ansible.builtin.file:
+        path: "{{ wg_target_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Remove legacy WireGuard ops tree
+      ansible.builtin.file:
+        path: "{{ wireguard_ops_root }}/wireguard"
+        state: absent
+      failed_when: false
+
+    - name: Remove legacy WireGuard config trees
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ wg_target_dir }}/interface"
+        - "{{ wg_target_dir }}/peers"
+        - "{{ wg_target_dir }}/border_apply"
+      failed_when: false
+
+    - name: Render WireGuard env bundle
+      ansible.builtin.template:
+        src: wireguard.env.j2
+        dest: "{{ wg_target_dir }}/.env"
+        mode: '0600'
+      register: _wg_env
+
+    - name: Render docker-compose.yml
+      ansible.builtin.template:
+        src: docker-compose.yml.j2
+        dest: "{{ wg_compose_file }}"
+        mode: '0644'
+      register: _wg_compose
+
+    - name: Ensure src_valid_mark is enabled
+      ansible.posix.sysctl:
+        name: net.ipv4.conf.all.src_valid_mark
+        value: '1'
+        sysctl_set: true
+        state: present
+        reload: true
+      failed_when: false
+
+    - name: Determine if WG config changed
+      ansible.builtin.set_fact:
+        _wg_config_changed: >-
+          {{ _wg_env.changed or _wg_compose.changed }}
+
+    - name: Stop existing compose stack
+      community.docker.docker_compose_v2:
+        project_src: "{{ wg_target_dir }}"
+        files: "{{ wg_compose_file }}"
+        state: absent
+      failed_when: false
+      when: _wg_config_changed | bool
+
+    - name: Check if WireGuard interface exists
+      ansible.builtin.stat:
+        path: "/sys/class/net/{{ wireguard_interface_name }}"
+      register: _wg_iface_check
+      when: _wg_config_changed | bool
+
+    - name: Remove existing WireGuard interface
+      ansible.builtin.command: "ip link delete {{ wireguard_interface_name }}"
+      changed_when: true
+      when:
+        - _wg_config_changed | bool
+        - _wg_iface_check.stat.exists | default(false)
+
+    - name: Start compose stack
+      community.docker.docker_compose_v2:
+        project_src: "{{ wg_target_dir }}"
+        files: "{{ wg_compose_file }}"
+        state: present
+        build: never
+        wait: false
+      register: _wg_compose_result
+
+    # --- Runtime assertions: verify compose stack is healthy ---
+    - name: Assert all WireGuard compose services are running
+      ansible.builtin.assert:
+        that:
+          - _wg_compose_result.containers | length >= 1
+          - _wg_compose_result.containers | selectattr('State', 'equalto', 'running') | list | length
+              == _wg_compose_result.containers | length
+        fail_msg: >-
+          WireGuard compose stack has non-running services:
+          {{ _wg_compose_result.containers | map(attribute='State') | list }}
+        success_msg: "All {{ _wg_compose_result.containers | length }} WireGuard services are running"
+
+    - name: Assert no host-era WireGuard systemd units are active
+      ansible.builtin.command: systemctl is-active wg-quick@{{ wireguard_interface_name }}
+      register: _wg_host_unit
+      changed_when: false
+      failed_when: false
+
+    - name: Fail if host-era WireGuard unit is still active
+      ansible.builtin.assert:
+        that:
+          - _wg_host_unit.rc != 0
+        fail_msg: >-
+          Legacy host-era wg-quick@{{ wireguard_interface_name }} systemd unit is still active.
+          Disable it before using Docker-managed WireGuard.
+        success_msg: "No host-era WireGuard systemd unit detected"
+
+- name: Set compose file path fact
+  ansible.builtin.set_fact:
+    wireguard_compose_file: "{{ wg_compose_file }}"
+    wireguard_compose_project: "{{ wg_target_dir }}"

@@ -1,0 +1,25 @@
+---
+# Purpose: Tear down the Firezone compose stack and clean its directory
+#          (preserving persistent state dirs).
+# Entry points: Invoked by modules/linux_apply dispatcher via tasks_from=destroy.
+
+- name: Locate existing compose file
+  ansible.builtin.stat:
+    path: "{{ firezone_main_compose_file }}"
+  register: fz_main_compose_file_stat
+
+- name: Bring compose stack down
+  community.docker.docker_compose_v2:
+    project_src: "{{ fz_firezone_dir }}"
+    state: absent
+    remove_orphans: true
+    remove_volumes: true
+  when: fz_main_compose_file_stat.stat.exists
+
+- name: Remove firezone directory contents except persistent state artifacts
+  ansible.builtin.shell: >-
+    find {{ fz_firezone_dir | quote }} -mindepth 1 -maxdepth 1
+    ! -name postgres-data ! -name credentials.env ! -name firezone-data ! -name caddy-data
+    -exec rm -rf {} +
+  args:
+    removes: "{{ fz_firezone_dir }}"

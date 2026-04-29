@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  author: alexmkx
+  description: Shared templates and helpers reused across garuda roles
+  license: MIT
+  min_ansible_version: "2.9"
+  galaxy_tags:
+    - utility
+
+dependencies: []

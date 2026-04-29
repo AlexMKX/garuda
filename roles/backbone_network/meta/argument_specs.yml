@@ -1,0 +1,16 @@
+---
+argument_specs:
+  provision:
+    short_description: Deploy OSPF injector + FRR sidecar compose stack.
+    options:
+      backbone_dir:
+        type: str
+        required: true
+        description: Absolute path on target host for the compose project.
+  destroy:
+    short_description: Remove OSPF injector compose stack and directory.
+    options:
+      backbone_dir:
+        type: str
+        required: true
+        description: Absolute path on target host for the compose project.
