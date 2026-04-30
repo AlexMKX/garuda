@@ -11,6 +11,8 @@ module "apply" {
     ipt_clean_conntrack  = var.clean_conntrack
     ipt_domain_route_ttl = var.domain_route_ttl
     ipt_server_labels    = var.labels
+    ipt_pinning_egress   = var.pinning_egress
+    ipt_pinning_ttl      = var.pinning_ttl
   }
 
   connection_data = var.connection_data

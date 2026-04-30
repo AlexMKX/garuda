@@ -107,6 +107,13 @@ Response:
 
 This combination of `weight`, TTL, and PBR enables precise and dynamic control over network traffic.
 
+## Per-Source-IP Egress Pinning
+
+- **Per-source-IP egress pinning** — opt-in feature; users select an
+  egress through a one-page UI or GET-based API. See `configuration.md`
+  -> "Egress pinning".
+- **Self-service portal anchor** — nft REDIRECT intercepts packets destined for `1.1.1.1:1111` on the backbone interface and redirects them to the local pinning API; no DNS or separate service required.
+
 ## OSPF-Driven NHG Failover
 
 ### Overview

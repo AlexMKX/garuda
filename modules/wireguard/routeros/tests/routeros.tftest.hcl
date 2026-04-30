@@ -101,3 +101,57 @@ run "contract_routeros_interface_uses_tunnel_name" {
     error_message = "RouterOS WG interface name must be tunnel_name (env-prefixed), not kernel_ifname"
   }
 }
+
+run "contract_endpoint_sync_reconciles_multiple_resolved_ips" {
+  # The endpoint hostname can resolve to several A records (e.g. CDN /
+  # rolling deploys / stale Cloudflare entries).  Each resolved IP needs
+  # its own bypass routing rule, otherwise WG handshake to non-rule IPs
+  # self-loops through the tunnel itself.
+  #
+  # The reconcile script must therefore:
+  #   1. enumerate ALL dynamic entries in the per-tunnel address-list
+  #      (RouterOS resolver populates them automatically from the static
+  #      DNS-name entry),
+  #   2. install one /routing rule per resolved IP, tagged with a
+  #      per-IP comment so we can find each one again,
+  #   3. remove any rule whose IP is no longer in the list (drift).
+  command = plan
+
+  assert {
+    # Enumerates dynamic entries (resolved IPs), not the static DNS-name entry.
+    condition = strcontains(
+      routeros_system_script.wg_endpoint_sync.source,
+      "dynamic=yes",
+    )
+    error_message = "endpoint sync script must enumerate dynamic resolved-IP entries from the address-list"
+  }
+
+  assert {
+    # Each rule gets a per-IP comment so reconcile can match it back to its source IP.
+    # Comment format: "wg-ep:<tunnel>:<ip>".
+    condition = strcontains(
+      routeros_system_script.wg_endpoint_sync.source,
+      "wg-ep:test-env-wg-tik:",
+    )
+    error_message = "endpoint sync script must tag each rule with comment 'wg-ep:<tunnel>:<ip>' so per-IP reconcile can find it"
+  }
+
+  assert {
+    # Removes rules whose IP is no longer present (drift cleanup).
+    condition = strcontains(
+      routeros_system_script.wg_endpoint_sync.source,
+      "/routing rule remove",
+    )
+    error_message = "endpoint sync script must remove stale rules whose IP is no longer resolved"
+  }
+
+  assert {
+    # Keeps the lookup-only-in-table action so the loop-prevention
+    # property is preserved when the bypass table is empty.
+    condition = strcontains(
+      routeros_system_script.wg_endpoint_sync.source,
+      "lookup-only-in-table",
+    )
+    error_message = "endpoint sync script must use lookup-only-in-table action to prevent WG self-loop when bypass table is empty"
+  }
+}

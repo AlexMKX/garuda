@@ -1,35 +1,71 @@
-# Single-tunnel endpoint sync script.
-# Resolves the endpoint DNS name and reconciles exactly one /routing rule
-# identified by the per-tunnel comment "wg-ep:${tunnel_name}".
+# Per-tunnel endpoint sync script.
+#
+# Reconciles /routing rules so that traffic to every IP currently in the
+# per-tunnel address-list is forced through the bypass routing table, never
+# through main (which would self-loop the WG handshake through the tunnel
+# itself).
+#
+# The endpoint hostname can resolve to several A records (CDN fan-out,
+# rolling deploys, stale Cloudflare records, etc.).  RouterOS' resolver
+# populates dynamic address-list entries for every resolved IP next to the
+# static DNS-name entry (`dynamic=no`), so we read the dynamic set and
+# install one rule per IP.
+#
+# Each rule carries a per-IP comment "wg-ep:<tunnel>:<ip>" so this script
+# can find / drop / update it on subsequent runs without scanning the rest
+# of the rule table.
 
 :local listName "${list_name}"
 :local tableName "${table_name}"
-:local ruleComment "wg-ep:${tunnel_name}"
+:local commentPrefix "wg-ep:${tunnel_name}:"
 
-:local entry [/ip firewall address-list find where list=$listName dynamic=no]
-:if ([:len $entry] = 0) do={
-  :local existing [/routing rule find where comment=$ruleComment]
-  :if ([:len $existing] > 0) do={
-    /routing rule remove $existing
+# Static DNS-name entry: presence gates the whole sync.  If the operator
+# removed it (e.g. tunnel decommission) we drop every wg-ep:<tunnel>:* rule
+# and return.
+:local dnsEntry [/ip firewall address-list find where list=$listName dynamic=no]
+:if ([:len $dnsEntry] = 0) do={
+  :local stale [/routing rule find where comment~("^" . $commentPrefix)]
+  :foreach r in=$stale do={
+    /routing rule remove $r
   }
   :return
 }
 
-:local dnsName [/ip firewall address-list get ($entry->0) address]
-:local resolvedIp [:resolve $dnsName]
-:local dstAddr ($resolvedIp . "/32")
-:local existing [/routing rule find where comment=$ruleComment]
+# Dynamic entries hold the resolved IPs.  Build the desired-state set.
+:local desiredIps ""
+:foreach d in=[/ip firewall address-list find where list=$listName dynamic=yes] do={
+  :local addr [/ip firewall address-list get $d address]
+  :set desiredIps ($desiredIps . $addr . ",")
+}
 
-# Use lookup-only-in-table (NOT lookup): if the bypass table is empty
-# at the moment this rule is evaluated, packets must be dropped rather
-# than fall through to main, where the WG default would self-loop the
-# handshake back into the tunnel. With persistent-keepalive=25s the
-# handshake retries, by which point the caller-supplied default route
-# is in the bypass table.
-:if ([:len $existing] = 0) do={
-  /routing rule add dst-address=$dstAddr action=lookup-only-in-table table=$tableName comment=$ruleComment
-  :log info ("wg-ep-sync: +rule " . $dstAddr . " [" . "${tunnel_name}" . "]")
-} else={
-  /routing rule set ($existing->0) dst-address=$dstAddr action=lookup-only-in-table table=$tableName comment=$ruleComment
-  :log info ("wg-ep-sync: rule updated " . $dstAddr . " [" . "${tunnel_name}" . "]")
+# Drop rules whose IP is no longer resolved (drift cleanup).
+# Match on the comment prefix so we only touch rules this script owns.
+:foreach r in=[/routing rule find where comment~("^" . $commentPrefix)] do={
+  :local rc [/routing rule get $r comment]
+  :local rip [:pick $rc [:len $commentPrefix] [:len $rc]]
+  :if ([:find $desiredIps ($rip . ",") 0] = "") do={
+    /routing rule remove $r
+    :log info ("wg-ep-sync: -rule " . $rip . " [${tunnel_name}]")
+  }
+}
+
+# Install / refresh one rule per resolved IP.
+#
+# Use lookup-only-in-table (NOT lookup): if the bypass table is empty at
+# the moment this rule is evaluated, packets must be dropped rather than
+# fall through to main, where the WG default would self-loop the handshake
+# back into the tunnel.  With persistent-keepalive=25s the handshake
+# retries, by which point the caller-supplied default route is in the
+# bypass table.
+:foreach d in=[/ip firewall address-list find where list=$listName dynamic=yes] do={
+  :local addr [/ip firewall address-list get $d address]
+  :local dstAddr ($addr . "/32")
+  :local ruleComment ($commentPrefix . $addr)
+  :local existing [/routing rule find where comment=$ruleComment]
+  :if ([:len $existing] = 0) do={
+    /routing rule add dst-address=$dstAddr action=lookup-only-in-table table=$tableName comment=$ruleComment
+    :log info ("wg-ep-sync: +rule " . $dstAddr . " [${tunnel_name}]")
+  } else={
+    /routing rule set ($existing->0) dst-address=$dstAddr action=lookup-only-in-table table=$tableName comment=$ruleComment
+  }
 }

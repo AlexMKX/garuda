@@ -1,0 +1,59 @@
+---
+# Input contract for ensure_docker_image. Fails fast with operator-friendly
+# messages when the caller (or the env) is misconfigured.
+
+- name: Validate ensure_docker_image_source value
+  ansible.builtin.assert:
+    that:
+      - ensure_docker_image_source in ['pull', 'build']
+    fail_msg: >-
+      ensure_docker_image_source must be 'pull' or 'build'
+      (got: {{ ensure_docker_image_source | default('<unset>') }}).
+      Set GARUDA_IMAGE_SOURCE=pull (clients pull from ghcr.io)
+      or GARUDA_IMAGE_SOURCE=build (developers build locally).
+
+- name: Validate ensure_docker_image_name is non-empty
+  ansible.builtin.assert:
+    that:
+      - ensure_docker_image_name | default('') | length > 0
+    fail_msg: >-
+      ensure_docker_image_name must be set by the caller (stable local tag,
+      e.g. garuda/ipt-server:latest).
+
+- name: Validate pull-mode requires ensure_docker_image_remote_ref
+  ansible.builtin.assert:
+    that:
+      - ensure_docker_image_remote_ref | default('') | length > 0
+      - "'/' in ensure_docker_image_remote_ref"
+      - "':' in ensure_docker_image_remote_ref"
+    fail_msg: >-
+      Pull mode requires ensure_docker_image_remote_ref like
+      ghcr.io/<org>/<image>:<tag>
+      (got: {{ ensure_docker_image_remote_ref | default('<unset>') }}).
+  when: ensure_docker_image_source == 'pull'
+
+- name: Validate build-mode requires ensure_docker_image_build_path
+  ansible.builtin.assert:
+    that:
+      - ensure_docker_image_build_path | default('') | length > 0
+    fail_msg: >-
+      Build mode requires ensure_docker_image_build_path on the controller.
+  when: ensure_docker_image_source == 'build'
+
+- name: Validate build-mode build path exists on controller
+  ansible.builtin.stat:
+    path: "{{ ensure_docker_image_build_path }}"
+  register: _ensure_docker_image_build_path_stat
+  delegate_to: localhost
+  become: false
+  when: ensure_docker_image_source == 'build'
+
+- name: Fail when build path is missing on controller
+  ansible.builtin.assert:
+    that:
+      - _ensure_docker_image_build_path_stat.stat.exists | default(false)
+      - _ensure_docker_image_build_path_stat.stat.isdir | default(false)
+    fail_msg: >-
+      Build mode build path does not exist on controller:
+      {{ ensure_docker_image_build_path }}
+  when: ensure_docker_image_source == 'build'

@@ -1,0 +1,236 @@
+---
+# Controller-build delivery flow.
+# Build → save → copy → load → retag → digest assert.
+# Wrapped in block/always so temp dirs are cleaned up on both success and failure.
+
+- name: Deliver docker image from controller to target (build)
+  block:
+    - name: Create controller temp directory
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: "{{ ensure_docker_image_controller_temp_prefix }}"
+      register: ensure_docker_image_controller_temp
+      delegate_to: localhost
+      become: false
+
+    - name: Build image on controller
+      community.docker.docker_image_build:
+        name: "{{ ensure_docker_image_name }}"
+        path: "{{ ensure_docker_image_build_path }}"
+        rebuild: always
+      delegate_to: localhost
+      become: false
+
+    - name: Save image archive on controller
+      community.docker.docker_image_export:
+        names:
+          - "{{ ensure_docker_image_name }}"
+        path: "{{ ensure_docker_image_controller_temp.path }}/{{ ensure_docker_image_archive_name }}"
+        force: true
+      delegate_to: localhost
+      become: false
+
+    - name: Extract controller manifest digest from archive
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - |
+            import json
+            import tarfile
+            import sys
+
+            with tarfile.open(sys.argv[1], "r") as archive:
+                index = json.load(archive.extractfile("index.json"))
+            print(index["manifests"][0]["digest"])
+          - "{{ ensure_docker_image_controller_temp.path }}/{{ ensure_docker_image_archive_name }}"
+      register: ensure_docker_image_controller_manifest_digest
+      changed_when: false
+      delegate_to: localhost
+      become: false
+
+    - name: Inspect image metadata on target
+      community.docker.docker_image_info:
+        name: "{{ ensure_docker_image_name }}"
+      register: ensure_docker_image_target_image_metadata
+
+    - name: Derive target manifest digest before load
+      ansible.builtin.set_fact:
+        _ensure_docker_image_target_manifest_digest: >-
+          {{
+            '' if (ensure_docker_image_target_image_metadata.images | length) == 0
+            else (
+              (
+                (
+                  (ensure_docker_image_target_image_metadata.images | first).Descriptor
+                  | default({})
+                ).digest
+                | default('')
+              )
+              or
+              (
+                (
+                  (ensure_docker_image_target_image_metadata.images | first).RepoDigests
+                  | default([])
+                  | first
+                  | default('')
+                )
+                | regex_replace('^.*@', '')
+              )
+            )
+          }}
+
+    - name: Determine whether target image load is required
+      ansible.builtin.set_fact:
+        _ensure_docker_image_needs_load: >-
+          {{
+            _ensure_docker_image_target_manifest_digest | default('') | length == 0
+            or ensure_docker_image_controller_manifest_digest.stdout
+               != (_ensure_docker_image_target_manifest_digest | default(''))
+          }}
+
+    - name: Create target temp directory
+      ansible.builtin.tempfile:
+        state: directory
+        path: /tmp/
+        prefix: "{{ ensure_docker_image_target_temp_prefix }}"
+      register: ensure_docker_image_target_temp
+      when:
+        - _ensure_docker_image_needs_load | bool
+
+    - name: Copy image archive to target
+      ansible.builtin.copy:
+        src: "{{ ensure_docker_image_controller_temp.path }}/{{ ensure_docker_image_archive_name }}"
+        dest: "{{ ensure_docker_image_target_temp.path }}/{{ ensure_docker_image_archive_name }}"
+        mode: "0644"
+      when:
+        - _ensure_docker_image_needs_load | bool
+
+    - name: Load image on target
+      community.docker.docker_image_load:
+        path: "{{ ensure_docker_image_target_temp.path }}/{{ ensure_docker_image_archive_name }}"
+      when:
+        - _ensure_docker_image_needs_load | bool
+
+    - name: Inspect image metadata on target after load
+      community.docker.docker_image_info:
+        name: "{{ ensure_docker_image_name }}"
+      register: ensure_docker_image_target_image_metadata_after_load
+      when:
+        - _ensure_docker_image_needs_load | bool
+
+    - name: Derive target manifest digest after load
+      ansible.builtin.set_fact:
+        _ensure_docker_image_target_manifest_digest_after_load: >-
+          {{
+            '' if (ensure_docker_image_target_image_metadata_after_load.images | length) == 0
+            else (
+              (
+                (
+                  (ensure_docker_image_target_image_metadata_after_load.images | first).Descriptor
+                  | default({})
+                ).digest
+                | default('')
+              )
+              or
+              (
+                (
+                  (ensure_docker_image_target_image_metadata_after_load.images | first).RepoDigests
+                  | default([])
+                  | first
+                  | default('')
+                )
+                | regex_replace('^.*@', '')
+              )
+            )
+          }}
+      when:
+        - _ensure_docker_image_needs_load | bool
+
+    - name: Verify loaded image digest matches controller manifest
+      ansible.builtin.assert:
+        that:
+          - _ensure_docker_image_target_manifest_digest_after_load | length > 0
+          - _ensure_docker_image_target_manifest_digest_after_load == ensure_docker_image_controller_manifest_digest.stdout
+        fail_msg: >-
+          Loaded image manifest digest mismatch for {{ ensure_docker_image_name }}:
+          controller={{ ensure_docker_image_controller_manifest_digest.stdout }}
+          target={{ _ensure_docker_image_target_manifest_digest_after_load | default('missing') }}
+      when:
+        - _ensure_docker_image_needs_load | bool
+
+    - name: Tag delivered image with requested stable name
+      community.docker.docker_image_tag:
+        name: "{{ ensure_docker_image_name }}@{{ _ensure_docker_image_target_manifest_digest_after_load }}"
+        repository: "{{ ensure_docker_image_name }}"
+      when:
+        - _ensure_docker_image_needs_load | bool
+
+    - name: Inspect requested image name on target after tag
+      community.docker.docker_image_info:
+        name: "{{ ensure_docker_image_name }}"
+      register: _ensure_docker_image_target_image_metadata_via_stable_tag
+
+    - name: Derive stable-tag digest after tag
+      ansible.builtin.set_fact:
+        _ensure_docker_image_target_manifest_digest_via_stable_tag: >-
+          {{
+            '' if (_ensure_docker_image_target_image_metadata_via_stable_tag.images | length) == 0
+            else (
+              (
+                (
+                  (_ensure_docker_image_target_image_metadata_via_stable_tag.images | first).Descriptor
+                  | default({})
+                ).digest
+                | default('')
+              )
+              or
+              (
+                (
+                  (_ensure_docker_image_target_image_metadata_via_stable_tag.images | first).RepoDigests
+                  | default([])
+                  | first
+                  | default('')
+                )
+                | regex_replace('^.*@', '')
+              )
+            )
+          }}
+
+    - name: Verify target stable tag resolves to delivered digest
+      ansible.builtin.assert:
+        that:
+          - _ensure_docker_image_target_manifest_digest_via_stable_tag | length > 0
+          - _ensure_docker_image_target_manifest_digest_via_stable_tag == ensure_docker_image_controller_manifest_digest.stdout
+        fail_msg: >-
+          Stable-tag digest mismatch for {{ ensure_docker_image_name }}:
+          controller={{ ensure_docker_image_controller_manifest_digest.stdout }}
+          stable_tag={{ _ensure_docker_image_target_manifest_digest_via_stable_tag | default('missing') }}
+
+    - name: Set effective delivered manifest digest (build mode)
+      ansible.builtin.set_fact:
+        _ensure_docker_image_effective_target_manifest_digest: >-
+          {{
+            _ensure_docker_image_target_manifest_digest_after_load
+            if (_ensure_docker_image_needs_load | bool)
+            else _ensure_docker_image_target_manifest_digest
+          }}
+
+  always:
+    - name: Remove controller temp directory
+      ansible.builtin.file:
+        path: "{{ ensure_docker_image_controller_temp.path }}"
+        state: absent
+      delegate_to: localhost
+      become: false
+      when:
+        - ensure_docker_image_controller_temp is defined
+        - ensure_docker_image_controller_temp.path is defined
+
+    - name: Remove target temp directory
+      ansible.builtin.file:
+        path: "{{ ensure_docker_image_target_temp.path }}"
+        state: absent
+      when:
+        - ensure_docker_image_target_temp is defined
+        - ensure_docker_image_target_temp.path is defined

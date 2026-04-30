@@ -71,6 +71,33 @@ terraform apply
 For first-run caveats (Firezone OIDC two-pass apply) see the
 [operations guide](docs/user-guide/05-operations.md#first-time-deploy).
 
+## Image source: pull (clients) vs build (developers)
+
+`garuda` workloads run as Docker containers. The `ensure_docker_image`
+role delivers each image to its target host in one of two modes,
+selected by the `GARUDA_IMAGE_SOURCE` environment variable on the
+machine that runs `terraform`/`terragrunt`:
+
+| Mode    | Behaviour                                                                                              | When to use            |
+| ------- | ------------------------------------------------------------------------------------------------------ | ---------------------- |
+| `pull`  | The target pulls pre-built images from `ghcr.io/alexmkx/garuda-*` and retags them to the local stable tag. | End users (clients).   |
+| `build` | The controller builds each image from sources in `roles/<role>/files/<image>/`, then ships a tar archive to the target via Ansible. | Developers, CI.        |
+
+Set the variable once before `terraform apply`:
+
+```bash
+export GARUDA_IMAGE_SOURCE=pull   # or 'build'
+```
+
+If `GARUDA_IMAGE_SOURCE` is unset the role defaults to `build`. This is
+deliberate — a forgotten env var must not silently replace local
+Dockerfile changes with a stale `:latest` from the registry. Clients
+must set `pull` explicitly.
+
+`pull` mode does not require Docker on the controller; the target does
+the work. `build` mode requires a working `docker` daemon and a clone of
+the garuda-repo source tree on the controller.
+
 ## Documentation map
 
 User-facing:

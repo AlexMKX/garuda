@@ -50,8 +50,6 @@ from ipt_server import state
 
 logger = logging.getLogger(__name__)
 
-WS_ROUTE_APPLY_BUDGET_SECONDS = 0.1
-
 
 def _template_env() -> jinja2.Environment:
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(_PACKAGE_ROOT))
@@ -298,11 +296,12 @@ async def process_a_record_with_budget(record) -> dict:
     query = record.get("query", "?")
     name = record.get("name", "?")
     ip = record.get("content", "?")
+    budget = state.CONFIG.ws_route_apply_budget_seconds
     started = time.monotonic()
     try:
         rv = await asyncio.wait_for(
             asyncio.to_thread(process_a_record, record),
-            timeout=WS_ROUTE_APPLY_BUDGET_SECONDS,
+            timeout=budget,
         )
         elapsed = time.monotonic() - started
         logger.info(
@@ -321,7 +320,7 @@ async def process_a_record_with_budget(record) -> dict:
         elapsed = time.monotonic() - started
         logger.warning(
             "A-record processing exceeded %.3fs budget after %.3fs; returning degraded TTL: query=%s name=%s ip=%s",
-            WS_ROUTE_APPLY_BUDGET_SECONDS,
+            budget,
             elapsed,
             query,
             name,
@@ -451,6 +450,30 @@ async def async_main():
     # Start Route Health Monitor (no-op if no gated interfaces configured)
     health_source = build_route_health_source(state.CONFIG)
     asyncio.create_task(monitor_route_health(health_source))
+
+    # Pinning subsystem (opt-in: empty catalog -> no kernel writes, no HTTP).
+    if getattr(state.CONFIG, "pinning_egress", None):
+        from pinning.bootstrap import setup_pinning  # local import: feature optional
+
+        def _interfaces_view():
+            with state.INTERFACES_LOCK:
+                return list(state.INTERFACES.keys())
+
+        manager, reconciler, _http_task = await setup_pinning(
+            cfg=state.CONFIG,
+            interfaces_view=_interfaces_view,
+            stop_event=stop_event,
+        )
+        state.PINNING_MANAGER = manager
+        state.PINNING_RECONCILER = reconciler
+        logger.info(
+            "pinning enabled: %d egresses, ttl=%ds, port=%d",
+            len(state.CONFIG.pinning_egress),
+            state.CONFIG.pinning_ttl,
+            state.CONFIG.pinning_api_port,
+        )
+    else:
+        logger.info("pinning disabled (empty pinning_egress catalog)")
 
     # Initial health check: only replay routes for healthy gated interfaces.
     if health_source is not None:

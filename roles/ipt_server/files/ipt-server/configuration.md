@@ -134,3 +134,68 @@ table: 200
 ```
 
 For more on `route_ttl`, NHG failover, and routing behavior, see [FEATURES.md](./featues.md).
+
+## Egress pinning
+
+Optional. Lets a transit-network user pin all of their traffic to a chosen
+egress (overriding the default geo-PBR Auto behaviour) via a one-page web
+UI and a small GET-based REST API.
+
+### Settings
+
+```yaml
+ipt_pinning_egress:
+  hub:
+    gw: 192.0.2.1
+  usa:
+    dev: border
+ipt_pinning_ttl: 86400        # seconds; default 24h
+ipt_pinning_api_port: 80      # inside the container
+```
+
+Keys are slug-style identifiers shown to the user (`^[a-z0-9_-]+$`). The
+key `auto` is reserved. An empty map disables the subsystem entirely:
+no aiohttp listener, no kernel writes, no `ip rule` entries.
+
+### Endpoints
+
+| Verb | Path | Purpose |
+|------|------|---------|
+| GET  | `/`                          | HTML UI (rendered server-side) |
+| GET  | `/api/egresses`              | JSON: list of egress keys |
+| GET  | `/api/pin`                   | JSON: current pin for the calling source IP |
+| GET  | `/api/pin/set?egress=<key>`  | Set/refresh a pin |
+| GET  | `/api/pin/clear`             | Clear the pin (back to Auto) |
+
+Identity is the TCP source address of the request. Client-supplied
+`saddr=` query parameters and `X-Forwarded-For` headers are ignored.
+
+Pass `&return=html` to mutating endpoints to receive a 303 redirect to
+`/` instead of JSON; the UI uses this to chain navigation without JS.
+
+### Script example
+
+```bash
+curl http://<ipt-server>/api/egresses
+curl "http://<ipt-server>/api/pin/set?egress=hub"
+curl http://<ipt-server>/api/pin
+curl http://<ipt-server>/api/pin/clear
+```
+
+### Lifecycle
+
+Pinnings live in memory; container restarts wipe them. A pin auto-expires
+after `ipt_pinning_ttl` seconds; visiting `/api/pin/set` (or the UI link)
+refreshes the timer. Sweeping runs every 60s.
+
+If a pinned egress goes dead (OSPF probe fails, or `dev` interface is
+absent), the per-egress routing table installs `blackhole default` and
+the pinned traffic is dropped — there is no fallback to Auto. The user
+must switch back manually.
+
+### Self-service portal anchor
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `pinning_portal_anchor_addr` | `1.1.1.1` | Public IP used as the nft REDIRECT anchor for the self-service portal. Traffic to this address on `pinning_portal_anchor_port` is intercepted in the `prerouting` chain and redirected to the local pinning API listener. The Cloudflare anycast address is used because it is guaranteed to route through the full-tunnel WireGuard interface; tcp/1111 does not collide with any Cloudflare DNS service port. |
+| `pinning_portal_anchor_port` | `1111` | TCP port matched by the REDIRECT rule. |

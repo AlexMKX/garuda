@@ -1,4 +1,5 @@
 websockets
+aiohttp>=3.9
 pyroute2>=0.9.5,<0.10
 pydantic
 pydantic-settings

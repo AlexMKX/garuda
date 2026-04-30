@@ -1,5 +1,19 @@
 ---
+# Image delivery defaults.
+#
+# Source of the image is selected by GARUDA_IMAGE_SOURCE on the controller:
+#   pull  — fetch ensure_docker_image_remote_ref on the target (clients).
+#   build — build ensure_docker_image_build_path on the controller and
+#           deliver it to the target via save/copy/load (developers).
+#
+# Default falls back to 'build' on purpose: a forgotten env var must
+# never silently pull a stale :latest from ghcr while the developer is
+# iterating on a Dockerfile. Clients set GARUDA_IMAGE_SOURCE=pull once
+# (see top-level README quickstart).
+ensure_docker_image_source: "{{ lookup('env', 'GARUDA_IMAGE_SOURCE') | default('build', true) }}"
+
 ensure_docker_image_name: ""
+ensure_docker_image_remote_ref: ""
 ensure_docker_image_build_path: ""
 ensure_docker_image_archive_name: image.tar
 ensure_docker_image_controller_temp_prefix: ensure-docker-image-

@@ -12,5 +12,10 @@ ipt_nic_attach: ["backbone"]
 ipt_clean_conntrack: false
 ipt_domain_route_ttl: 300
 ipt_server_image: garuda/ipt-server:latest
+ipt_server_image_remote_ref: ghcr.io/alexmkx/garuda-ipt-server:latest
 ipt_powerdns_image: garuda/powerdns:latest
+ipt_powerdns_image_remote_ref: ghcr.io/alexmkx/garuda-powerdns:latest
 ipt_server_labels: {}
+ipt_pinning_egress: {}
+ipt_pinning_ttl: 86400
+ipt_pinning_api_port: 80

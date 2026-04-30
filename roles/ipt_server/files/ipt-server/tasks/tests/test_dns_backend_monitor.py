@@ -2,6 +2,7 @@
 
 import asyncio
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -25,6 +26,24 @@ class _SingleMessageWebSocket:
 
 
 class TestWebsocketHook(unittest.IsolatedAsyncioTestCase):
+    """echo() reads the apply budget from state.CONFIG.ws_route_apply_budget_seconds.
+
+    Each test installs a SimpleNamespace stand-in so process_a_record_with_budget
+    has the attribute it expects. Tests that exercise the budget timeout pick a
+    value tight enough to trigger the cutoff; the rest leave a generous default.
+    """
+
+    def setUp(self):
+        from ipt_server import state
+
+        self._saved_config = state.CONFIG
+        state.CONFIG = SimpleNamespace(ws_route_apply_budget_seconds=1.0)
+
+    def tearDown(self):
+        from ipt_server import state
+
+        state.CONFIG = self._saved_config
+
     async def test_echo_processes_a_record_and_replies_with_json(self):
         import ipt_server.main
 
@@ -125,16 +144,14 @@ class TestWebsocketHook(unittest.IsolatedAsyncioTestCase):
             '{"query":"b.com.","name":"b.com.","content":"2.2.2.2","type":1,"ttl":60}'
         )
 
-        with (
-            patch(
-                "ipt_server.main.process_a_record", side_effect=slow_process_a_record
-            ),
-            patch(
-                # Budget must exceed SLOW_MS so the normal TTL is returned (not degraded).
-                # This test validates concurrency, not the budget cutoff.
-                "ipt_server.main.WS_ROUTE_APPLY_BUDGET_SECONDS",
-                SLOW_MS * 3,
-            ),
+        from ipt_server import state
+
+        # Budget must exceed SLOW_MS so the normal TTL is returned (not degraded).
+        # This test validates concurrency, not the budget cutoff.
+        state.CONFIG.ws_route_apply_budget_seconds = SLOW_MS * 3
+
+        with patch(
+            "ipt_server.main.process_a_record", side_effect=slow_process_a_record
         ):
             t0 = asyncio.get_event_loop().time()
             await asyncio.gather(
@@ -167,10 +184,11 @@ class TestWebsocketHook(unittest.IsolatedAsyncioTestCase):
             time.sleep(0.2)
             return {"ttl": 300}
 
-        with (
-            patch("ipt_server.main.process_a_record", side_effect=slow_process),
-            patch("ipt_server.main.WS_ROUTE_APPLY_BUDGET_SECONDS", 0.05),
-        ):
+        from ipt_server import state
+
+        state.CONFIG.ws_route_apply_budget_seconds = 0.05
+
+        with patch("ipt_server.main.process_a_record", side_effect=slow_process):
             await asyncio.wait_for(ipt_server.main.echo(websocket), timeout=1)
 
         self.assertEqual(websocket.sent, ['{"ttl": 1, "degraded": true}'])
@@ -184,10 +202,11 @@ class TestWebsocketHook(unittest.IsolatedAsyncioTestCase):
             '{"query":"fast.example.","name":"fast.example.","content":"5.6.7.8","type":1,"ttl":300}'
         )
 
-        with (
-            patch("ipt_server.main.process_a_record", return_value={"ttl": 123}),
-            patch("ipt_server.main.WS_ROUTE_APPLY_BUDGET_SECONDS", 0.2),
-        ):
+        from ipt_server import state
+
+        state.CONFIG.ws_route_apply_budget_seconds = 0.2
+
+        with patch("ipt_server.main.process_a_record", return_value={"ttl": 123}):
             await asyncio.wait_for(ipt_server.main.echo(websocket), timeout=1)
 
         self.assertEqual(websocket.sent, ['{"ttl": 123}'])

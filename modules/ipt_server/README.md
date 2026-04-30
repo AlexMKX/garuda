@@ -21,6 +21,8 @@ Inputs:
 - `connection_data` — normalized transport/auth contract for the target Linux host, passed to `linux_apply` unchanged
 - `extra_hostvars` (default `{}`) — optional additional hostvars merged into module-local ansible_host variables
 - `labels` (mandatory, non-empty) — Docker container labels; must include `garuda.frr.ospf.router_id`. Caller-supplied values override role-side garuda invariants in `combine`
+- `pinning_egress` (default `{}`) — optional egress catalog for per-source-IP pinning; empty map disables the feature entirely
+- `pinning_ttl` (default `86400`) — pin TTL in seconds; refreshed on each API/UI visit
 
 Behavior:
 
@@ -29,3 +31,22 @@ Behavior:
 - FRR runs in the `ipt_server` network namespace via `network_mode: service:garuda_ipt`
 - connects to `backbone_network` as `external: true`
 - dataplane subnet `172.31.0.0/24` is hardcoded in the compose template (enforced by `tests/test_ipt_server_delivery_contracts.py`); it is not a module input
+
+## Egress pinning
+
+```hcl
+module "ipt_server" {
+  source = "..."
+  pinning_egress = {
+    hub = { gw = "192.0.2.1" }
+    usa = { dev = "border" }
+  }
+  pinning_ttl = 86400  # default; can be omitted
+}
+```
+
+`pinning_egress` is `map(object({ gw = optional(string), dev = optional(string) }))`.
+An empty map (the default) disables the feature; no kernel writes, no HTTP listener.
+
+Each entry must set exactly one of `gw` or `dev`. Keys must match the slug
+pattern `^[a-z0-9_-]+$` and must not be `auto` (case-insensitive).

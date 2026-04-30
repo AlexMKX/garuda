@@ -47,6 +47,7 @@
     name: ensure_docker_image
   vars:
     ensure_docker_image_name: "{{ wireguard_image }}"
+    ensure_docker_image_remote_ref: "{{ wireguard_image_remote_ref }}"
     ensure_docker_image_build_path: "{{ _wireguard_build_path }}"
 
 - name: Apply WireGuard configuration

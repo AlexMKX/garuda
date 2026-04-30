@@ -87,6 +87,37 @@ variable "extra_hostvars" {
   default     = {}
 }
 
+variable "pinning_egress" {
+  description = "Optional egress catalog for per-source-IP pinning. Keys are slug-style identifiers shown to end users (^[a-z0-9_-]+$, 'auto' is reserved). Each value is one of {gw = string} or {dev = string}. An empty map disables the pinning subsystem entirely."
+  type = map(object({
+    gw  = optional(string)
+    dev = optional(string)
+  }))
+  default = {}
+
+  validation {
+    condition = alltrue([
+      for key, _ in var.pinning_egress :
+      can(regex("^[a-z0-9_-]+$", key)) && lower(key) != "auto"
+    ])
+    error_message = "pinning_egress keys must match ^[a-z0-9_-]+$ and must not be 'auto' (case-insensitive)."
+  }
+
+  validation {
+    condition = alltrue([
+      for _, target in var.pinning_egress :
+      (target.gw != null) != (target.dev != null)
+    ])
+    error_message = "Each pinning_egress entry must set exactly one of gw or dev."
+  }
+}
+
+variable "pinning_ttl" {
+  description = "Pinning TTL in seconds. Each UI/API visit refreshes the TTL for the calling source IP. Default: 24h."
+  type        = number
+  default     = 86400
+}
+
 variable "labels" {
   description = "Docker container labels applied to the workload service. Caller must supply at least 'garuda.frr.ospf.router_id'. Consumed by the sidecar operator for workload discovery and per-container FRR/PBR rendering."
   type        = map(string)

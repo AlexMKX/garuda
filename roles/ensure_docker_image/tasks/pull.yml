@@ -1,0 +1,123 @@
+---
+# Pull-from-registry delivery flow. Runs entirely on the target.
+# pull → inspect → swap-decision → retag → digest assert.
+
+- name: Inspect image metadata on target before pull
+  community.docker.docker_image_info:
+    name: "{{ ensure_docker_image_name }}"
+  register: _ensure_docker_image_target_metadata_before_pull
+
+- name: Derive target manifest digest before pull
+  ansible.builtin.set_fact:
+    _ensure_docker_image_target_manifest_digest_before_pull: >-
+      {{
+        '' if (_ensure_docker_image_target_metadata_before_pull.images | length) == 0
+        else (
+          (
+            (
+              (_ensure_docker_image_target_metadata_before_pull.images | first).Descriptor
+              | default({})
+            ).digest
+            | default('')
+          )
+          or
+          (
+            (
+              (_ensure_docker_image_target_metadata_before_pull.images | first).RepoDigests
+              | default([])
+              | first
+              | default('')
+            )
+            | regex_replace('^.*@', '')
+          )
+        )
+      }}
+
+- name: Pull image from remote registry on target
+  community.docker.docker_image_pull:
+    name: "{{ ensure_docker_image_remote_ref }}"
+  register: _ensure_docker_image_pull_result
+
+- name: Inspect pulled image on target
+  community.docker.docker_image_info:
+    name: "{{ ensure_docker_image_remote_ref }}"
+  register: _ensure_docker_image_pulled_metadata
+
+- name: Derive pulled manifest digest
+  ansible.builtin.set_fact:
+    _ensure_docker_image_pulled_manifest_digest: >-
+      {{
+        (
+          (
+            (_ensure_docker_image_pulled_metadata.images | first | default({})).Descriptor
+            | default({})
+          ).digest
+          | default('')
+        )
+        or
+        (
+          (
+            (_ensure_docker_image_pulled_metadata.images | first | default({})).RepoDigests
+            | default([])
+            | first
+            | default('')
+          )
+          | regex_replace('^.*@', '')
+        )
+      }}
+
+- name: Determine whether target image needs swap
+  ansible.builtin.set_fact:
+    _ensure_docker_image_needs_load: >-
+      {{
+        _ensure_docker_image_target_manifest_digest_before_pull | default('') | length == 0
+        or _ensure_docker_image_target_manifest_digest_before_pull
+           != _ensure_docker_image_pulled_manifest_digest
+      }}
+
+- name: Tag pulled image with requested stable name
+  community.docker.docker_image_tag:
+    name: "{{ ensure_docker_image_remote_ref }}"
+    repository: "{{ ensure_docker_image_name }}"
+
+- name: Inspect requested image name on target after tag
+  community.docker.docker_image_info:
+    name: "{{ ensure_docker_image_name }}"
+  register: _ensure_docker_image_target_image_metadata_via_stable_tag
+
+- name: Derive stable-tag digest after tag (pull mode)
+  ansible.builtin.set_fact:
+    _ensure_docker_image_target_manifest_digest_via_stable_tag: >-
+      {{
+        (
+          (
+            (_ensure_docker_image_target_image_metadata_via_stable_tag.images | first | default({})).Descriptor
+            | default({})
+          ).digest
+          | default('')
+        )
+        or
+        (
+          (
+            (_ensure_docker_image_target_image_metadata_via_stable_tag.images | first | default({})).RepoDigests
+            | default([])
+            | first
+            | default('')
+          )
+          | regex_replace('^.*@', '')
+        )
+      }}
+
+- name: Verify target stable tag resolves to pulled digest
+  ansible.builtin.assert:
+    that:
+      - _ensure_docker_image_target_manifest_digest_via_stable_tag | length > 0
+      - _ensure_docker_image_target_manifest_digest_via_stable_tag == _ensure_docker_image_pulled_manifest_digest
+    fail_msg: >-
+      Stable-tag digest mismatch for {{ ensure_docker_image_name }}:
+      pulled={{ _ensure_docker_image_pulled_manifest_digest }}
+      stable_tag={{ _ensure_docker_image_target_manifest_digest_via_stable_tag | default('missing') }}
+
+- name: Set effective delivered manifest digest (pull mode)
+  ansible.builtin.set_fact:
+    _ensure_docker_image_effective_target_manifest_digest: "{{ _ensure_docker_image_pulled_manifest_digest }}"

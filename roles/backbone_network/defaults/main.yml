@@ -6,3 +6,8 @@ border_subnet: ""
 # OPERATOR_NETWORKS env var. When empty, the operator uses built-in defaults (backbone_network
 # and border_network). Override entries are merged with defaults by name.
 ospf_injector_networks: []
+
+# Image delivery contract — ghcr remote refs paired with the literal
+# local tags hardcoded in tasks/provision.yml.
+backbone_ospf_injector_image_remote_ref: ghcr.io/alexmkx/garuda-ospf-injector:latest
+backbone_frr_sidecar_image_remote_ref: ghcr.io/alexmkx/garuda-frr-sidecar:latest

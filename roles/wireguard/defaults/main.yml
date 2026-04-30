@@ -4,6 +4,7 @@ wireguard_ops_root: /opt/mesh/ops
 
 # Image delivery contract
 wireguard_image: garuda/wireguard:latest
+wireguard_image_remote_ref: ghcr.io/alexmkx/garuda-wireguard:latest
 
 # Backbone / RPDB defaults
 wireguard_listen_port: ""

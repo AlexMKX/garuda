@@ -34,6 +34,7 @@
     name: ensure_docker_image
   vars:
     ensure_docker_image_name: "{{ ipt_server_image }}"
+    ensure_docker_image_remote_ref: "{{ ipt_server_image_remote_ref }}"
     ensure_docker_image_build_path: "{{ _ipt_server_role_path }}/files/ipt-server"
 
 - name: Stash ipt_server image load result
@@ -45,6 +46,7 @@
     name: ensure_docker_image
   vars:
     ensure_docker_image_name: "{{ ipt_powerdns_image }}"
+    ensure_docker_image_remote_ref: "{{ ipt_powerdns_image_remote_ref }}"
     ensure_docker_image_build_path: "{{ _ipt_server_role_path }}/files/powerdns"
 
 - name: Stash powerdns image load result

@@ -7,9 +7,13 @@ from typing import TYPE_CHECKING, Dict
 if TYPE_CHECKING:
     from Config import MySettings
     from Router import Router
+    from pinning.manager import PinningManager
+    from pinning.kernel import KernelReconciler
 
 CONFIG: MySettings | None = None
 ROUTER: Router | None = None
+PINNING_MANAGER: "PinningManager | None" = None
+PINNING_RECONCILER: "KernelReconciler | None" = None
 INTERFACE_HEALTH: dict[str, bool] = {}
 
 # Snapshot of ifname -> ifindex owned by tasks/interface_monitor.py.

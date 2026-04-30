@@ -290,6 +290,12 @@ class MySettings(BaseSettings):
     ws_port: int = Field(8765)
     pbr_mark: int = Field(512)
     dns_mark: int = Field(513)
+    # Bound for synchronous PBR install latency before the websocket DNS
+    # handler returns a degraded TTL=1 response. Keep below the Lua hook's
+    # ws:receive timeout (currently 0.25s in
+    # roles/ipt_server/files/powerdns/etc/hook.lua) so PowerDNS receives
+    # the JSON ack before giving up. See docs/artifacts/dns-pbr-race-*.
+    ws_route_apply_budget_seconds: float = Field(0.2, gt=0)
     interfaces: List[str] = Field(
         validation_alias=AliasChoices("IPT_INTERFACES_JSON", "interfaces"),
     )
@@ -309,6 +315,20 @@ class MySettings(BaseSettings):
     routes: List[Union[CountryRoute, DomainRoute, NetRoute, RouteActionGroup]] = Field(
         validation_alias=AliasChoices("IPT_ROUTES_JSON", "routes"),
     )
+    pinning_egress: Dict[str, RouteMember] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("IPT_PINNING_EGRESS_JSON", "pinning_egress"),
+    )
+    pinning_ttl: int = Field(
+        default=86400,
+        validation_alias=AliasChoices("IPT_PINNING_TTL", "pinning_ttl"),
+    )
+    pinning_api_port: int = Field(
+        default=80,
+        validation_alias=AliasChoices("IPT_PINNING_API_PORT", "pinning_api_port"),
+    )
+    pinning_portal_anchor_addr: str = "1.1.1.1"
+    pinning_portal_anchor_port: int = 1111
 
     @staticmethod
     def _parse_json_env(value: Any, env_key: str, expected_type: type):
@@ -343,6 +363,32 @@ class MySettings(BaseSettings):
                 raise ValueError(f"{field_name}[{i}] must be a non-empty string")
             normalized.append(value)
         return normalized
+
+    @field_validator("pinning_egress", mode="before")
+    @classmethod
+    def parse_pinning_egress(cls, v: Any) -> Dict[str, Any]:
+        if v is None or v == "":
+            return {}
+        if isinstance(v, dict):
+            return v
+        return cls._parse_json_env(v, "IPT_PINNING_EGRESS_JSON", dict)
+
+    @field_validator("pinning_egress")
+    @classmethod
+    def validate_pinning_egress_keys(
+        cls, v: Dict[str, "RouteMember"]
+    ) -> Dict[str, "RouteMember"]:
+        slug_re = re.compile(r"^[a-z0-9_-]+$")
+        for key in v.keys():
+            if key.lower() == "auto":
+                raise ValueError(
+                    f"egress key {key!r} is reserved (case-insensitive 'auto')"
+                )
+            if not slug_re.fullmatch(key):
+                raise ValueError(
+                    f"egress key {key!r} must match slug pattern ^[a-z0-9_-]+$"
+                )
+        return v
 
     @field_validator("interfaces", mode="before")
     def parse_interfaces(cls, v: Any) -> List[str]:

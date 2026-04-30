@@ -43,6 +43,35 @@ run "contract_labels_variable_passes_through_router_id" {
 # passes it will get "An argument named workload_client_cidrs is not expected"
 # at terraform validate / plan time. No runtime test needed.
 
+run "pinning_egress_passthrough" {
+  # Verify that pinning_egress/pinning_ttl are accepted by the module schema
+  # and that their validated values are plumbed through to variables.
+  command = plan
+
+  variables {
+    pinning_egress = {
+      hub = { gw = "192.0.2.1" }
+      usa = { dev = "border" }
+    }
+    pinning_ttl = 3600
+  }
+
+  assert {
+    condition     = var.pinning_egress["hub"].gw == "192.0.2.1"
+    error_message = "pinning_egress hub.gw must equal the input value"
+  }
+
+  assert {
+    condition     = var.pinning_egress["usa"].dev == "border"
+    error_message = "pinning_egress usa.dev must equal the input value"
+  }
+
+  assert {
+    condition     = var.pinning_ttl == 3600
+    error_message = "pinning_ttl must equal the input value"
+  }
+}
+
 run "contract_labels_mandatory" {
   command = plan
 
