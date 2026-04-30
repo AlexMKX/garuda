@@ -144,6 +144,8 @@
               )
             )
           }}
+        _ensure_docker_image_target_image_id_after_load: >-
+          {{ (ensure_docker_image_target_image_metadata_after_load.images | first | default({})).Id | default('') }}
       when:
         - _ensure_docker_image_needs_load | bool
 
@@ -159,9 +161,16 @@
       when:
         - _ensure_docker_image_needs_load | bool
 
+    # Identify the source by image ID (Id, config sha256) instead of
+    # <name>@<manifest-digest>: community.docker.docker_image_tag's
+    # parse_repository_tag splits @ correctly but then treats the digest
+    # as a tag in find_image(), failing with "Cannot find image
+    # <name>:<sha256:...>". Passing the bare image ID makes
+    # is_image_name_id() match and routes through find_image_by_id().
+    # The image ID is captured from the post-load inspection above.
     - name: Tag delivered image with requested stable name
       community.docker.docker_image_tag:
-        name: "{{ ensure_docker_image_name }}@{{ _ensure_docker_image_target_manifest_digest_after_load }}"
+        name: "{{ _ensure_docker_image_target_image_id_after_load }}"
         repository: "{{ ensure_docker_image_name }}"
       when:
         - _ensure_docker_image_needs_load | bool
