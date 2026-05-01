@@ -95,6 +95,64 @@ async def test_clear_pin_calls_manager_then_reconciles(cli, manager, reconciler)
     reconciler.reconcile.assert_awaited_once_with({})
 
 
+async def test_set_pin_flushes_conntrack_for_caller_saddr(
+    cli, manager, reconciler
+):
+    """After a pin change the reconciler must drop conntrack flows for
+    the caller's saddr.  Without this, browsers reusing long-lived
+    HTTP/2 connections keep egressing through the previous route
+    (conntrack-tied) even though `meta mark set` re-fires on every
+    packet.  curl sees the new egress (fresh flow) but the user does
+    not — exactly the symptom we hit in production.
+
+    Asserted shape: reconcile() runs first (kernel ruleset matches the
+    new pin), THEN flush_conntrack(saddr) drops the now-stale flows.
+    Reversing the order would race: a packet arriving between the
+    flush and the reconcile would re-establish a flow under the OLD
+    nft set membership, defeating the flush.
+    """
+    import time
+    from pinning.manager import PinEntry
+    # aiohttp test client connects from 127.0.0.1 loopback; PinEntry's
+    # saddr field is informational only — the API uses request.remote.
+    manager.set.return_value = PinEntry(
+        saddr="127.0.0.1", egress="outer-pt",
+        expires_at=time.time() + 86400,
+    )
+    manager.snapshot.return_value = {"127.0.0.1": "outer-pt"}
+    resp = await cli.get("/api/pin/set?egress=outer-pt")
+    assert resp.status == 200
+
+    reconciler.flush_conntrack.assert_awaited_once_with("127.0.0.1")
+    # Order: reconcile runs before flush_conntrack.
+    reconcile_call = reconciler.reconcile.await_args_list[0]
+    flush_call = reconciler.flush_conntrack.await_args_list[0]
+    # awaitlist is ordered by completion of the AsyncMock; for a single
+    # event-loop sequential await both calls land in the order issued.
+    # Use mock_calls on the parent Mock to verify global ordering:
+    method_names = [c[0] for c in reconciler.method_calls]
+    assert method_names.index("reconcile") < method_names.index("flush_conntrack")
+
+
+async def test_clear_pin_flushes_conntrack_for_caller_saddr(
+    cli, manager, reconciler
+):
+    """Same contract for `clear`: after the pin is removed, drop the
+    conntrack flows the (now-cleared) pin had biased so the caller's
+    next request gets routed by the freshly-rendered fall-through
+    path (no fwmark match → main table)."""
+    manager.snapshot.return_value = {}
+    resp = await cli.get("/api/pin/clear")
+    assert resp.status == 200
+    reconciler.flush_conntrack.assert_awaited_once_with("192.0.2.42") if False else None
+    # The aiohttp test client connects from 127.0.0.1 — assert against
+    # whatever request.remote returned, not a hard-coded value.
+    reconciler.flush_conntrack.assert_awaited_once()
+    flush_saddr = reconciler.flush_conntrack.await_args.args[0]
+    # request.remote on aiohttp_client loopback transport is "127.0.0.1".
+    assert flush_saddr == "127.0.0.1"
+
+
 async def test_set_pin_html_toggle_redirects(cli, manager):
     manager.snapshot.return_value = {}
     resp = await cli.get(

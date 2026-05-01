@@ -129,6 +129,124 @@ def test_classification_rules_use_pin_marks_starting_at_0xA00():
     assert "ip saddr @pinned_outer_pt meta mark set 0xa01" in ruleset
 
 
+def test_classification_rules_also_stamp_ct_mark_for_post_pin_flush():
+    """Each pin classification rule must stamp `ct mark` alongside
+    `meta mark` so the conntrack flow inherits the per-egress
+    discriminator.
+
+    Why ct mark, not just packet mark: kernel conntrack stores the
+    associated ct mark verbatim in /proc/net/nf_conntrack.  When a
+    pin changes we want to drop ONLY the forwarded user flows that
+    inherited the OLD ct mark — not the local portal HTTP
+    connections (which never traverse this chain and therefore have
+    ct mark 0).  Without this stamp the only way to flush stale
+    forwarded flows is `conntrack -D -s <saddr>` which collaterally
+    kills the very portal connection that asked for the pin change,
+    causing the issuing browser tab to time out.
+
+    Pinning marks live in 0x0A00..0x0AFF (PIN_MARK_BASE + index).
+    Mask 0xff00 isolates that range from any other ct mark scheme
+    (PBR uses 0x200, DNS uses 0x201 in `meta mark` only — these never
+    end up as ct marks because no rule sets them on ct).
+    """
+    ruleset = NftRenderer(
+        catalog={"outer-de": object(), "outer-pt": object()},
+        portal_addr="192.0.2.1",
+        portal_port=1,
+        api_port=80,
+    ).render(pins={})
+    # Both marks must be set on the same line (same packet match) so
+    # they cannot diverge under partial rule failure.  nft accepts
+    # multiple statements on one rule line; kernel applies them
+    # atomically.
+    assert (
+        "ip saddr @pinned_outer_de meta mark set 0xa00 ct mark set 0xa00"
+        in ruleset
+    ), (
+        "first egress must stamp both packet mark and ct mark with "
+        "the same per-egress value (0xA00 + index)"
+    )
+    assert (
+        "ip saddr @pinned_outer_pt meta mark set 0xa01 ct mark set 0xa01"
+        in ruleset
+    )
+
+
+def test_filter_prerouting_bypasses_portal_destination_before_classification():
+    """The pinning filter prerouting chain must `return` on portal-bound
+    traffic before any saddr classification fires.
+
+    Portal-bound packets (iifname=backbone, daddr=portal_addr,
+    tcp dport=portal_port) traverse BOTH the nat chain (which does
+    REDIRECT) AND this filter chain — they share the prerouting hook.
+    Without an early-return guard the filter chain would stamp ct mark
+    on the portal flow's first packet, and a subsequent
+    `conntrack -D --mark <pinning>/0xff00` would then sweep the
+    portal connection alongside the genuinely-forwarded user flows,
+    timing out the in-flight HTTP request that issued the pin change.
+
+    The guard MUST come before the saddr-set lookups so the early
+    return wins regardless of pinning state.  We anchor it after the
+    iifname/private-subnets gates because both still apply (portal
+    IS public, but classification is the wrong place to act on it).
+    """
+    ruleset = NftRenderer(
+        catalog={"hub": object()},
+        portal_addr="192.0.2.7",
+        portal_port=1234,
+        api_port=8080,
+    ).render(pins={})
+    # Slice the filter chain body out of the rendered text.
+    filter_block = (
+        ruleset.split("type filter hook prerouting", 1)[1]
+        .split("}", 1)[0]
+    )
+    iifname_pos = filter_block.find('iifname != "backbone" return')
+    portal_pos = filter_block.find("ip daddr 192.0.2.7 tcp dport 1234 return")
+    classify_pos = filter_block.find("meta mark set")
+    assert iifname_pos != -1
+    assert portal_pos != -1, (
+        "filter prerouting must contain a portal-bypass rule "
+        "(`ip daddr <portal_addr> tcp dport <portal_port> return`) "
+        "to keep portal flows out of the pinning ct mark family"
+    )
+    assert classify_pos != -1
+    assert iifname_pos < portal_pos < classify_pos, (
+        "portal bypass must sit between the iifname guard and the "
+        "saddr classification so it short-circuits the chain "
+        "regardless of pinning-set membership"
+    )
+
+
+def test_portal_redirect_does_not_set_ct_mark():
+    """The portal NAT redirect rule must NOT stamp ct mark.
+
+    Portal connections (browser → 1.1.1.1:1111 redirected to local
+    :80) live in a separate flow from the forwarded user traffic
+    they administer.  When a pin change triggers a flush by ct
+    mark / pin-mask, portal connections must remain untouched —
+    otherwise the very HTTP request that issued the pin change
+    times out because its conntrack flow vanished mid-response.
+
+    We assert by structural property: the only place ct mark gets
+    set in the rendered ruleset is inside the filter classification
+    chain (the `prerouting` chain after the iifname / private guard),
+    never on the portal redirect line.
+    """
+    ruleset = NftRenderer(
+        catalog={"hub": object()},
+        portal_addr="192.0.2.1",
+        portal_port=1111,
+        api_port=80,
+    ).render(pins={})
+    redirect_line = next(
+        line for line in ruleset.splitlines() if "redirect to :80" in line
+    )
+    assert "ct mark" not in redirect_line, (
+        f"portal redirect line must not stamp ct mark; got: {redirect_line!r}"
+    )
+
+
 def test_pin_mark_base_carries_the_pin_bit():
     """PIN_MARK_BASE must include the discriminator bit 0x800."""
     from pinning.nft_renderer import PIN_BIT, PIN_MARK_BASE

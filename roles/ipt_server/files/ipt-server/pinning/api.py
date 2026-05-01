@@ -117,6 +117,12 @@ async def set_pin(request: web.Request) -> web.Response:
     entry = await deps.manager.set(saddr, egress)
     # nft reconcile sees the up-to-date snapshot.
     await deps.reconciler.reconcile(await deps.manager.snapshot())
+    # Drop existing conntrack flows for this saddr so long-lived
+    # browser connections (HTTP/2, persistent) re-enter the freshly-
+    # loaded pinning prerouting chain on their next packet instead
+    # of riding the conntrack-tied routing decision the previous
+    # pin had committed.
+    await deps.reconciler.flush_conntrack(saddr)
     if request.query.get("return") == "html":
         raise web.HTTPSeeOther(location="/")
     now = time.time()
@@ -136,6 +142,9 @@ async def clear_pin(request: web.Request) -> web.Response:
     saddr = _client_saddr(request)
     await deps.manager.clear(saddr)
     await deps.reconciler.reconcile(await deps.manager.snapshot())
+    # See set_pin: drop conntrack so the caller's existing flows
+    # don't keep riding the cleared pin's prior routing decision.
+    await deps.reconciler.flush_conntrack(saddr)
     if request.query.get("return") == "html":
         raise web.HTTPSeeOther(location="/")
     return web.json_response(
