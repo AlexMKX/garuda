@@ -5,6 +5,34 @@ Deploy WireGuard mesh networks with optional keepalived HA and Docker Compose in
 This role manages WireGuard tunnel configuration and optional keepalived for HA failover.
 It does **not** manage FRR, OSPF, or route distribution — those belong to the `routing` role.
 
+## NAT model — border-only
+
+The WireGuard container's `postup.sh` installs **exactly one** masquerade
+rule: `oifname "border" masquerade`, gated on the presence of `border` in
+`WG_NIC_ATTACH`. There is no `oifname "<wg-iface>" masquerade` and no
+`oifname "backbone" masquerade`. Backbone is internal mesh and is never
+masqueraded; the WG tunnel itself is also never masqueraded so that
+end-to-end source IPs are preserved across the mesh.
+
+Containers without `border` in their attachments install no NAT and no PBR
+at all — only the unconditional MSS clamp. This keeps `wg-tik`-style leaf
+containers transparent: they do not rewrite source IPs of forwarded transit
+traffic, which is essential for the `ipt_server` pinning portal (which
+needs to see the real client tunnel IP) and for OSPF transit consumers
+(which expect peer addresses, not proxied ones).
+
+The container also sets `net.ipv4.conf.all.rp_filter=2` (loose) via Docker
+`sysctls`. This is required because all hosts in a typical Garuda topology
+share the same backbone /24 (e.g. `172.30.0.0/24`); strict RPF would
+otherwise drop transit packets whose reverse-path interface is the
+self-connected backbone bridge, not the wg interface they actually arrived
+on.
+
+If you are running this role in a topology that does **not** include a
+`border`-bridge SNAT chain on at least one egress workload, you will need
+to provide masquerade somewhere upstream yourself (e.g. on the host) — the
+role itself will not do it.
+
 ## Features
 
 - [OK] **WireGuard mesh generation** - Automatic peer configuration and key management

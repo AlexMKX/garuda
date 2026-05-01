@@ -1,31 +1,50 @@
 #!/bin/bash
 # WireGuard PostUp script.
 #
-# Block 1 (always): nft masquerade + MSS clamping on backbone and wg tunnel
-#   interfaces.
-#   - oifname "backbone": masquerades transit traffic that exits via backbone
-#     to the Docker host (outer-pt role — decrypted packets forwarded out).
-#   - oifname WG_INTERFACE: masquerades transit traffic entering the wg tunnel
-#     (rutestvpn role — packets forwarded into the encrypted tunnel).
-#   - MSS clamping on the WG interface prevents TCP black-hole issues when
-#     the effective path MTU is smaller than what the endpoints negotiate.
+# Architecture:
+#   - MSS clamp is installed unconditionally.  Path-MTU through any WG
+#     tunnel is smaller than the negotiated TCP MSS by default; without
+#     clamping, large segments black-hole.  This is independent of
+#     whether the container egresses traffic to the public internet.
+#   - NAT (oifname "border" masquerade) and RPDB (iif backbone lookup
+#     via_tunnel) are installed only when "border" is present in
+#     WG_NIC_ATTACH.  Internal-mesh participants (no border) install
+#     no NAT and no RPDB so that source IPs propagate through the
+#     backbone untouched — required for identity-aware features such
+#     as the pinning portal at 1.1.1.1:1111.
 #
-# Block 2 (border only): RPDB via_tunnel so backbone-ingress transit traffic
-#   is directed into the WG tunnel instead of the local default route.
+# Operators deploying the role outside the standard Garuda topology
+# can layer additional rules via WG_POST_UP (already injected into the
+# wg-quick conf by entrypoint.sh, before this script runs).
 
 set -e
 
-# --- Block 1: nft masquerade (always) ---
-# Applied unconditionally so both tunnel roles work:
-#   rutestvpn wg_uk: oifname WG_INTERFACE catches packets going into the tunnel.
-#   outer-pt wg_uk:  oifname backbone catches decrypted packets forwarded to host.
-# Private destinations are bypassed on both rules.
-
 TABLE_NAME="border_${WG_INTERFACE}"
 
+# --- Block 1: nft table base + MSS clamp (always) ---
 nft add table inet "$TABLE_NAME" 2>/dev/null || true
 nft delete table inet "$TABLE_NAME" 2>/dev/null || true
 
+nft -f - <<EOF
+table inet ${TABLE_NAME} {
+    chain forward {
+        type filter hook forward priority mangle; policy accept;
+        oifname "${WG_INTERFACE}" tcp flags syn tcp option maxseg size set rt mtu
+    }
+}
+EOF
+
+echo "[POSTUP] MSS clamp applied: oifname ${WG_INTERFACE} in table ${TABLE_NAME}"
+
+# --- Block 2: gate on border attach ---
+if ! echo "${WG_NIC_ATTACH:-[]}" | grep -q '"border"'; then
+    echo "[POSTUP] border not in WG_NIC_ATTACH — skipping NAT and RPDB"
+    exit 0
+fi
+
+# --- Block 3: nft NAT (border only) ---
+# Append the postrouting chain to the existing table.  oifname
+# "border" only: backbone is internal mesh, never masqueraded.
 nft -f - <<EOF
 table inet ${TABLE_NAME} {
     chain postrouting {
@@ -34,36 +53,18 @@ table inet ${TABLE_NAME} {
         ip daddr 172.16.0.0/12 return
         ip daddr 192.168.0.0/16 return
         ip daddr 100.64.0.0/10 return
-        oifname "${WG_INTERFACE}" masquerade
-        oifname "backbone" masquerade
         oifname "border" masquerade
-    }
-
-    chain forward {
-        type filter hook forward priority mangle; policy accept;
-        # Clamp MSS on TCP SYN/SYN-ACK entering the WG tunnel so that the
-        # negotiated TCP segment size never exceeds the tunnel MTU minus headers.
-        # This prevents TCP black-hole issues (large packets silently dropped)
-        # when the path MTU through the tunnel is lower than what endpoints agree.
-        oifname "${WG_INTERFACE}" tcp flags syn tcp option maxseg size set rt mtu
     }
 }
 EOF
 
-echo "[POSTUP] nft masquerade + MSS clamp applied: oifname ${WG_INTERFACE} in table ${TABLE_NAME}"
+echo "[POSTUP] border masquerade applied in table ${TABLE_NAME}"
 
-# --- Block 2: RPDB via_tunnel (border only) ---
-# When border is attached, transit traffic arriving on backbone must be
-# directed into the WG tunnel (not default-routed via border).
-# Locally-originated traffic (OSPF, health checks) is unaffected because
-# iif only matches forwarded packets.
-
-if ! echo "${WG_NIC_ATTACH:-[]}" | grep -q '"border"'; then
-    echo "[POSTUP] border not in WG_NIC_ATTACH — skipping via_tunnel RPDB"
-    exit 0
-fi
-
-echo "[POSTUP] Configuring via_tunnel RPDB for ${WG_INTERFACE}"
+# --- Block 4: RPDB via_tunnel (border only) ---
+# Backbone-ingress transit traffic is directed into the WG tunnel
+# instead of the local default route.  Locally-originated traffic
+# (OSPF, health checks) is unaffected because the iif match only
+# fires on forwarded packets.
 
 mkdir -p /etc/iproute2
 touch /etc/iproute2/rt_tables

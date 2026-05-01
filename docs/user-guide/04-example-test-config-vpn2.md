@@ -1,6 +1,6 @@
-# 4. Three-node example: `dev/vpn2`
+# 4. Three-node example: `test-config/vpn2`
 
-`dev/vpn2` is a real, deployable topology. It is also the canonical
+`test-config/vpn2` is a real, deployable topology. It is also the canonical
 example for the three Garuda node roles. While the platform is transport-agnostic, this reference implementation explicitly uses WireGuard for tunnels and Firezone for end-user access.
 
 | Node         | Role           | Inventory name          | Responsibilities                                |
@@ -35,17 +35,17 @@ example for the three Garuda node roles. While the platform is transport-agnosti
 
 ## File map
 
-- `dev/vpn2/locals.tf` — canonical topology facts
+- `test-config/vpn2/locals.tf` — canonical topology facts
   (`host_facts`, `tunnel_facts`, `workload_facts`, `ipt_routes`).
-- `dev/vpn2/main.tf` — module wiring and provider bootstrap.
-- `dev/vpn2/outputs.tf` — root outputs and test-only outputs.
-- `dev/vpn2/reconcile_routeros.yml` — developer helper for RouterOS
+- `test-config/vpn2/main.tf` — module wiring and provider bootstrap.
+- `test-config/vpn2/outputs.tf` — root outputs and test-only outputs.
+- `test-config/vpn2/reconcile_routeros.yml` — developer helper for RouterOS
   DHCP table drift.
-- `dev/vpn2/healthcheck.yml` — post-apply probe suite entry point.
-- `dev/vpn2/destroy.yml` — orderly teardown.
-- `dev/vpn2/smoke/z2g.yml` — final end-to-end smoke playbook
+- `test-config/vpn2/healthcheck.yml` — post-apply probe suite entry point.
+- `test-config/vpn2/destroy.yml` — orderly teardown.
+- `test-config/vpn2/smoke/z2g.yml` — final end-to-end smoke playbook
   referenced by `AGENTS.md`.
-- `dev/vpn2/checklist.md` — manual verification checklist.
+- `test-config/vpn2/checklist.md` — manual verification checklist.
 
 ## `locals.tf` walkthrough
 
@@ -56,7 +56,7 @@ example for the three Garuda node roles. While the platform is transport-agnosti
 `host_facts` describes each physical node the stack runs on — its
 management address, SSH user, uplink interface name, and optional
 public WireGuard endpoint. The three nodes map exactly onto the role
-table above. See `dev/vpn2/locals.tf:5-53`.
+table above. See `test-config/vpn2/locals.tf:5-53`.
 
 ### Tunnel facts
 
@@ -65,7 +65,7 @@ table above. See `dev/vpn2/locals.tf:5-53`.
 `rutestvpn` (hub) to the RouterOS server-client. Labels under each
 peer drive FRR behaviour — for example, `outer_pt` gets
 `garuda.frr.ospf.default_originate = "true"` because it is the egress
-that originates the default route. See `dev/vpn2/locals.tf:66-119`.
+that originates the default route. See `test-config/vpn2/locals.tf:66-119`.
 
 ### Workload facts
 
@@ -77,7 +77,7 @@ that originates the default route. See `dev/vpn2/locals.tf:66-119`.
 - `ipt_server` — directory, router ID, and the set of client CIDRs it
   serves as transit provider.
 
-See `dev/vpn2/locals.tf:121-146`.
+See `test-config/vpn2/locals.tf:121-146`.
 
 ### `ipt_routes`
 
@@ -89,7 +89,7 @@ See `dev/vpn2/locals.tf:121-146`.
 - `country = "RU"` and `domain = ".*\\.ru"` route through the local
   `border` device, keeping Russian traffic local.
 
-See `dev/vpn2/locals.tf:180-219`.
+See `test-config/vpn2/locals.tf:180-219`.
 
 ## `main.tf` walkthrough
 
@@ -98,7 +98,7 @@ See `dev/vpn2/locals.tf:180-219`.
 `module.linux_host_prerequisites_rutestvpn` and
 `module.linux_host_prerequisites_outer` set Docker log rotation and
 sysctl (`ip_forward`, `rp_filter` per interface). These must run
-before any workload is deployed. See `dev/vpn2/main.tf:8-53`.
+before any workload is deployed. See `test-config/vpn2/main.tf:8-53`.
 
 ### WireGuard
 
@@ -108,7 +108,7 @@ per-peer blocks. `module.wireguard_linux_wg_uk_rutestvpn` and
 `nic_attach = ["backbone", "border"]` attaches it to both shared
 networks. `wg_tik` follows the same pattern, with the RouterOS side
 handled by `module.wireguard_routeros_wg_tik`. See
-`dev/vpn2/main.tf:57-114` and `dev/vpn2/main.tf:144-196`.
+`test-config/vpn2/main.tf:57-114` and `test-config/vpn2/main.tf:144-196`.
 
 ### RouterOS bootstrap
 
@@ -117,7 +117,7 @@ and set DNS servers. `module.wg_bypass_routeros` installs the
 bypass that keeps the WireGuard endpoint IP reachable through the
 DHCP-provided default route, so the tunnel can come up even if the
 RouterOS default route is later repointed. See
-`dev/vpn2/main.tf:116-140`.
+`test-config/vpn2/main.tf:116-140`.
 
 ### Backbone on both Linux nodes
 
@@ -125,7 +125,7 @@ RouterOS default route is later repointed. See
 `module.backbone_network_outer` (egress) each deploy a backbone
 operator with the same shared subnets: `172.30.0.0/24` for
 `backbone_network` and `172.29.0.0/24` for `border_network`. See
-`dev/vpn2/main.tf:198-226`.
+`test-config/vpn2/main.tf:198-226`.
 
 ### Hub workloads
 
@@ -137,7 +137,7 @@ operator with the same shared subnets: `172.30.0.0/24` for
   OSPF speaker and a transit provider
   (`garuda.transit.provider = "true"`).
 
-See `dev/vpn2/main.tf:228-275`.
+See `test-config/vpn2/main.tf:228-275`.
 
 ### RouterOS routing
 
@@ -145,7 +145,7 @@ See `dev/vpn2/main.tf:228-275`.
 static routes for the tunnel subnets. A single
 `routeros_ip_firewall_nat` resource masquerades VPN traffic leaving
 through the RouterOS uplink so that LAN devices can reply. See
-`dev/vpn2/main.tf:277-307`.
+`test-config/vpn2/main.tf:277-307`.
 
 ## Dependency graph
 
@@ -191,7 +191,7 @@ After `terraform apply`:
 
 ## Adapting to your own infrastructure
 
-Replace in `dev/vpn2`:
+Replace in `test-config/vpn2`:
 
 - `host_facts.*.management_host` and `inventory_name`.
 - `wireguard_public_endpoint.host` / `.ip` / `.port` for any node with
@@ -212,4 +212,4 @@ Replace in `dev/vpn2`:
   [`frr_injector/transit.md`](../../roles/backbone_network/files/ospf_injector/frr_injector/transit.md)
 - Shared networks:
   [`network_manager/README.md`](../../roles/backbone_network/files/ospf_injector/network_manager/README.md)
-- Verification checklist: [`dev/vpn2/checklist.md`](../../dev/vpn2/checklist.md)
+- Verification checklist: [`test-config/vpn2/checklist.md`](../../test-config/vpn2/checklist.md)

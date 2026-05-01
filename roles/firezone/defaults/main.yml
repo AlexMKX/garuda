@@ -21,4 +21,24 @@ fz_firezone_image: "{{fz_config['fz_firezone_image'] | default ('local/firezone:
 # Backbone / policy routing
 fz_nic_attach: "{{ fz_config['fz_nic_attach'] | default(['backbone']) }}"
 
+# Firezone built-in egress masquerade.
+#
+# DEFAULT IS FALSE.
+#
+# When `fz_masquerade=false`, the wg-firezone client subnet (10.0.24.0/24 by
+# default) is preserved end-to-end across backbone, wg-tunnels and border, so
+# downstream services (ipt_server pinning portal, OSPF transit, conntrack
+# observability) see the real client tunnel IP rather than a backbone-side
+# proxy. This requires the rest of the Garuda stack to handle SNAT at the
+# border (and only at the border), which is how the role is deployed in
+# Garuda topologies.
+#
+# !!! IMPORTANT — STAND-ALONE / NON-GARUDA OPERATORS !!!
+# If you run this role outside the Garuda stack (no border bridge with
+# masquerade, no upstream NAT chain), set `fz_masquerade=true` so firezone
+# falls back to its built-in upstream masquerade on every non-wg interface.
+# Without it, client traffic will leave the host with a non-routable
+# 10.0.24.0/24 source and be silently dropped by the upstream router.
+fz_masquerade: "{{ fz_config['fz_masquerade'] | default(false) }}"
+
 firezone_labels: {}

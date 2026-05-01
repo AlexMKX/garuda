@@ -15,7 +15,7 @@
 ## First-time deploy
 
 ```bash
-cd dev/vpn2
+cd test-config/vpn2
 terraform init
 terraform apply
 ```
@@ -40,7 +40,7 @@ After that, subsequent applies are single-pass.
 Per `AGENTS.md`, final end-to-end verification runs through:
 
 ```bash
-ansible-playbook dev/vpn2/smoke/z2g.yml
+ansible-playbook test-config/vpn2/smoke/z2g.yml
 ```
 
 `z2g` is the smoke playbook that checks the topology is converged,
@@ -59,13 +59,13 @@ transit routing works, and Firezone responds.
 ## Destroy
 
 ```bash
-terraform -chdir=dev/vpn2 destroy
+terraform -chdir=test-config/vpn2 destroy
 ```
 
 Or run the orderly playbook:
 
 ```bash
-ansible-playbook dev/vpn2/destroy.yml
+ansible-playbook test-config/vpn2/destroy.yml
 ```
 
 The backbone operator removes its own sidecars on shutdown as part of
@@ -78,7 +78,7 @@ RouterOS's DHCP client occasionally rewrites
 Reconcile it from a workstation without a full `apply`:
 
 ```bash
-ansible-playbook dev/vpn2/reconcile_routeros.yml -e reconcile_task=dhcp
+ansible-playbook test-config/vpn2/reconcile_routeros.yml -e reconcile_task=dhcp
 ```
 
 ## Testing
@@ -109,7 +109,7 @@ High-level steps. For the FRR label and sidecar contract, see
 3. Tag the container with the appropriate labels
    (`garuda.frr.ospf.enabled`, `garuda.frr.ospf.router_id`, etc.)
    so the backbone operator will attach an FRR sidecar.
-4. Wire the module into `dev/vpn2/main.tf` with `depends_on =
+4. Wire the module into `test-config/vpn2/main.tf` with `depends_on =
    [module.backbone_network_main]`.
 
 ## Troubleshooting

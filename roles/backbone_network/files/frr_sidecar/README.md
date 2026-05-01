@@ -73,7 +73,7 @@ tagged default route; consumers run the watcher to follow that advertisement.
 
 - [Dynamic PBR transit watcher design](../../../../docs/superpowers/specs/2026-04-06-dynamic-pbr-transit-watcher-design.md)
 - [Dynamic PBR transit watcher plan](../../../../docs/superpowers/plans/2026-04-06-dynamic-pbr-transit-watcher-plan.md)
-- [dev/vpn2 verification checklist](../../../../dev/vpn2/checklist.md)
+- [test-config/vpn2 verification checklist](../../../../test-config/vpn2/checklist.md)
 
 ## Key Code Entry Points
 

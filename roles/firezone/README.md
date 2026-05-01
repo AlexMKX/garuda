@@ -30,9 +30,37 @@ Role Variables
 | fz_postgres_bind      | no       | 127.0.0.1                            | Postgres bind address (host networking mode only).    |
 | fz_postgres_port      | no       | 5432                                 | Postgres port.                                        |
 | fz_firezone_image     | no       | local/firezone:0.7.30-nftedgefix     | Docker image to use for the Firezone container.       |
+| fz_nic_attach         | no       | `["backbone"]`                       | Transport networks the Firezone container is attached to. Allowed: `backbone`, `border`. |
+| fz_masquerade         | no       | `false`                              | Firezone built-in egress masquerade. **READ THE WARNING BELOW BEFORE OVERRIDING.** |
 
 This role is **deploy/bootstrap only**. OIDC and API configuration are handled by a
 separate role (`roles/firezone_oidc`).
+
+⚠ `fz_masquerade` — READ THIS BEFORE OVERRIDING
+-----------------------------------------------
+
+**The default is `false`. This is the correct value for Garuda topologies.**
+
+When `fz_masquerade=false`, the wg-firezone client subnet is preserved end to
+end across backbone, wg-tunnels and border. Downstream services (the
+`ipt_server` pinning portal, OSPF transit, conntrack observability) see the
+real client tunnel IP rather than a backbone-side proxy IP. In this mode SNAT
+is owned exclusively by the border bridge (`oifname "border" masquerade`
+rendered by the `wireguard` role's `postup.sh`).
+
+**!!! IMPORTANT — STAND-ALONE / NON-GARUDA DEPLOYMENTS !!!**
+
+If you use this role **outside the Garuda stack** — meaning there is no
+border bridge with masquerade, no `oifname "border"` SNAT chain on an
+adjacent wireguard container, and no upstream NAT gateway you control — you
+**MUST** set `fz_masquerade: true` (or supply it via `fz_config.fz_masquerade`).
+
+Without it, client traffic leaves the host with a non-routable source from
+your `fz_client_subnet` (default `10.11.0.0/24`) and is silently dropped by
+the upstream router. With `fz_masquerade=true` Firezone reverts to its
+built-in behaviour: rendering an `oifname <iface> masquerade persistent`
+rule on every non-wireguard interface it discovers via `/sys/class/net`,
+which is what the upstream OSS image expects when run alone.
 
 Credentials and Lifecycle
 -------------------------

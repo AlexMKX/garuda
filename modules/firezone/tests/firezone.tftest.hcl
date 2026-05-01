@@ -28,3 +28,25 @@ run "contract_labels_variable_accepts_map_string" {
     error_message = "labels must pass through verbatim as a map(string)"
   }
 }
+
+run "contract_masquerade_defaults_to_false" {
+  command = plan
+
+  assert {
+    condition     = var.masquerade == false
+    error_message = "masquerade must default to false (Garuda topologies own SNAT at the border bridge); stand-alone deployments must set masquerade=true explicitly"
+  }
+}
+
+run "contract_masquerade_accepts_true_override" {
+  command = plan
+
+  variables {
+    masquerade = true
+  }
+
+  assert {
+    condition     = var.masquerade == true
+    error_message = "masquerade must accept an explicit true override for stand-alone deployments without an upstream border SNAT chain"
+  }
+}

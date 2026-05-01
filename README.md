@@ -63,7 +63,7 @@ configuration.
 ## Quickstart
 
 ```bash
-cd dev/vpn2
+cd test-config/vpn2
 terraform init
 terraform apply
 ```
@@ -105,7 +105,7 @@ User-facing:
 1. [Overview — what Garuda is and why](docs/user-guide/01-overview.md)
 2. [Architecture — components and their roles](docs/user-guide/02-architecture.md)
 3. [Runtime processes — failover, OSPF, transit, health](docs/user-guide/03-processes.md)
-4. [Three-node example walkthrough (`dev/vpn2`)](docs/user-guide/04-example-dev-vpn2.md)
+4. [Three-node example walkthrough (`test-config/vpn2`)](docs/user-guide/04-example-test-config-vpn2.md)
 5. [Operations — deploy, verify, update, destroy, troubleshoot](docs/user-guide/05-operations.md)
 
 Component-level contracts:
@@ -119,7 +119,7 @@ Component-level contracts:
 - [ipt_server task layer](roles/ipt_server/files/ipt-server/tasks/README.md)
 - Terraform modules: see `modules/<name>/README.md`
 
-## `dev/vpn2` verification
+## `test-config/vpn2` verification
 
-- [Verification checklist](dev/vpn2/checklist.md)
-- Final smoke: `ansible-playbook dev/vpn2/smoke/z2g.yml` (see `AGENTS.md`).
+- [Verification checklist](test-config/vpn2/checklist.md)
+- Final smoke: `ansible-playbook test-config/vpn2/smoke/z2g.yml` (see `AGENTS.md`).

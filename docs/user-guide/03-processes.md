@@ -107,7 +107,7 @@ to a multi-hub topology is a deliberate future change.
 
 ## Geo and domain routing
 
-Geo and domain rules live in `dev/vpn2/locals.tf` as `ipt_routes`.
+Geo and domain rules live in `test-config/vpn2/locals.tf` as `ipt_routes`.
 Each entry has:
 
 - `rules` — matchers: `domain` (regex), `country` (ISO code), `net`
@@ -126,7 +126,7 @@ Task-level details:
 
 ## Destroy
 
-`terraform destroy` (or `dev/vpn2/destroy.yml`) tears things down in
+`terraform destroy` (or `test-config/vpn2/destroy.yml`) tears things down in
 reverse dependency order. The backbone operator removes its sidecars
 on shutdown via the same reconcile loop that created them. Shared
 Docker networks are removed last, after all consumers are gone.
@@ -143,4 +143,4 @@ Details:
 
 ## Next
 
-See [example deployment](04-example-dev-vpn2.md).
+See [example deployment](04-example-test-config-vpn2.md).

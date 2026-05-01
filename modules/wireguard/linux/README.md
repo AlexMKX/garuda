@@ -31,3 +31,24 @@ through to this module unchanged.
 | `post_up` | no | WireGuard PostUp command. |
 | `pre_down` | no | WireGuard PreDown command. |
 | `extra_hostvars` | no | Additional hostvars merged into the ansible host variables. |
+
+## NAT model — border-only
+
+The deployed container masquerades **only** on `oifname "border"`, gated on
+the presence of `border` in `nic_attach`. Backbone and the WG interface
+itself are never masqueraded, so source IPs propagate unmodified across
+the mesh — which the `ipt_server` pinning portal and OSPF transit consumers
+both rely on.
+
+If `nic_attach` does not include `border`, the container installs no NAT
+and no PBR at all (only the always-on MSS clamp). This is the correct
+configuration for transit-only leaves such as `wg-tik` whose traffic is
+forwarded to the egress workload (`wg-uk`, `wg-de`, ...) by `ipt_server`'s
+geo-PBR.
+
+`net.ipv4.conf.all.rp_filter=2` (loose) is set on the container via Docker
+`sysctls` because all hosts in a typical Garuda topology share the same
+backbone /24; strict RPF would otherwise drop transit packets.
+
+See the [`wireguard` role README](../../../roles/wireguard/README.md) for
+the full NAT/PBR contract.

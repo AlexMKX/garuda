@@ -38,7 +38,7 @@ traffic to the workload that owns the project's egress policy".
 The transit provider is the workload that advertises "send transit traffic to
 me".
 
-In the current `dev/vpn2` topology, that workload is `ipt_server`.
+In the current `test-config/vpn2` topology, that workload is `ipt_server`.
 
 It is marked with:
 
@@ -52,7 +52,7 @@ This label means:
 - the workload is the next transit hop for consumers
 - the workload owns the business policy for further routing decisions
 
-In [the `dev/vpn2` root topology](../../../../../dev/vpn2/main.tf):
+In [the `test-config/vpn2` root topology](../../../../../test-config/vpn2/main.tf):
 
 ```hcl
 labels = {
@@ -85,12 +85,12 @@ This label means:
 - the sidecar should maintain a transit routing table pointing at the current
   transit provider
 
-In the current `dev/vpn2` topology, the consumers are:
+In the current `test-config/vpn2` topology, the consumers are:
 
 - `firezone` with `garuda.transit.interfaces=wg-firezone`
 - `wg_tik` with `garuda.transit.interfaces=wg_tik`
 
-Examples from [the `dev/vpn2` topology facts](../../../../../dev/vpn2/locals.tf):
+Examples from [the `test-config/vpn2` topology facts](../../../../../test-config/vpn2/locals.tf):
 
 ```hcl
 firezone = {
@@ -155,7 +155,7 @@ This gives a cleaner separation:
 - consumer: "this traffic must go to the transit policy node"
 - provider: "I decide where this traffic leaves the system"
 
-## Current dev/vpn2 Topology
+## Current test-config/vpn2 Topology
 
 The live `rutestvpn` topology confirms this arrangement:
 
@@ -346,16 +346,16 @@ Why:
 - it should forward transit traffic to `ipt_server` instead of owning duplicate
   egress policy locally
 
-## Runtime Evidence From dev/vpn2
+## Runtime Evidence From test-config/vpn2
 
-The `dev/vpn2` verification checklist already encodes the expected runtime
+The `test-config/vpn2` verification checklist already encodes the expected runtime
 contract:
 
 - consumer sidecar has `ip rule` for the ingress interface
 - consumer sidecar has `table 10000` default route via `172.30.0.100`
 - provider sidecar advertises a tagged type-5 default LSA
 
-Examples from [the `dev/vpn2` verification checklist](../../../../../dev/vpn2/checklist.md):
+Examples from [the `test-config/vpn2` verification checklist](../../../../../test-config/vpn2/checklist.md):
 
 ```bash
 ssh vpn.example.com "sudo docker exec ospf-firezone-firezone-1 ip rule show | grep 10000"
@@ -374,8 +374,8 @@ Expected meaning:
   transit provider
 - transit provider = workload that owns project-specific egress policy
 - transit path = consumer-to-provider path over `backbone_network`
-- `ipt_server` is the current transit provider in `dev/vpn2`
-- `firezone` and `wg_tik` are current transit consumers in `dev/vpn2`
+- `ipt_server` is the current transit provider in `test-config/vpn2`
+- `firezone` and `wg_tik` are current transit consumers in `test-config/vpn2`
 - `transit_watcher.py` keeps consumer runtime routing aligned with the current
   provider chosen by OSPF
 
@@ -384,5 +384,5 @@ Expected meaning:
 - [Transit label model](transit_config.py)
 - [FRR consumer](consumer.py)
 - [Transit watcher runtime](../../frr_sidecar/transit_watcher.py)
-- [Provider topology wiring](../../../../../dev/vpn2/main.tf)
-- [Consumer topology facts](../../../../../dev/vpn2/locals.tf)
+- [Provider topology wiring](../../../../../test-config/vpn2/main.tf)
+- [Consumer topology facts](../../../../../test-config/vpn2/locals.tf)

@@ -5,7 +5,7 @@
 ```
 +-----------------------------------------------------------+
 |  Control plane (declarative)                              |
-|    Terraform (dev/vpn2) -> Ansible roles -> local-exec    |
+|    Terraform (test-config/vpn2) -> Ansible roles -> local-exec    |
 +-----------------------------------------------------------+
 |  Orchestration plane (runtime operators)                  |
 |    backbone operator: network_manager / frr_injector /    |
@@ -31,14 +31,14 @@ about.
 
 A Linux host that terminates many VPN tunnels at once and hosts
 the central workloads: user access portals (like `firezone`), `ipt_server` (policy
-routing and DNS intercept), and the backbone operator. In `dev/vpn2`
+routing and DNS intercept), and the backbone operator. In `test-config/vpn2`
 this is `rutestvpn`.
 
 ### Egress
 
 A Linux host with a public IP in a target geography. It accepts a
 VPN tunnel from the hub and lets the mesh exit through its
-uplink. In `dev/vpn2` this is `outer_pt` (UK uplink).
+uplink. In `test-config/vpn2` this is `outer_pt` (UK uplink).
 
 ### Server-client
 
@@ -49,7 +49,7 @@ It can be:
 - a Linux subnet or server reaching the mesh from its own side,
 - an end user onboarded through Firezone.
 
-In `dev/vpn2` a RouterOS device plays this role.
+In `test-config/vpn2` a RouterOS device plays this role.
 
 ## Shared transport networks
 
@@ -58,9 +58,17 @@ networks created and owned by the backbone operator:
 
 - `backbone_network` (172.30.0.0/24 in the example) — control plane
   mesh. OSPF adjacencies and inter-container control traffic ride on
-  this bridge.
+  this bridge. Source IPs are preserved on backbone; no SNAT happens
+  here.
 - `border_network` (172.29.0.0/24 in the example) — egress underlay
-  with Docker masquerade to the host uplink.
+  with Docker masquerade to the host uplink. Border is the **only**
+  place SNAT happens. Workloads attached to `border` (typically
+  `wg-uk`/`wg-de`/`ipt_server`) install `oifname "border"
+  masquerade` in their own postrouting chain; nothing else
+  masquerades. This preserves source-IP transparency end-to-end so
+  the `ipt_server` pinning portal, OSPF transit and conntrack
+  observability see real client tunnel IPs rather than backbone-side
+  proxy IPs.
 
 Runtime contract:
 [`roles/backbone_network/files/ospf_injector/network_manager/README.md`](../../roles/backbone_network/files/ospf_injector/network_manager/README.md).

@@ -9,6 +9,7 @@ module "apply" {
       fz_client_subnet  = var.client_subnet
       fz_server_url     = var.server_url
       fz_nic_attach     = var.nic_attach
+      fz_masquerade     = var.masquerade
     }
     fz_firezone_dir = var.firezone_dir
     firezone_labels = var.labels
