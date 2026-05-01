@@ -63,6 +63,16 @@ class NftRenderer:
     def sorted_keys(self) -> list:
         return list(self._sorted_keys)
 
+    @property
+    def portal_addr(self) -> str:
+        """The portal anchor address used for the prerouting bypass rule."""
+        return self._portal_addr
+
+    @property
+    def portal_port(self) -> int:
+        """The portal anchor TCP port used for the prerouting bypass rule."""
+        return self._portal_port
+
     @staticmethod
     def _set_name(egress: str) -> str:
         # nft set names allow [_a-zA-Z0-9]; egress keys may carry dashes

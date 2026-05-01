@@ -124,12 +124,9 @@ async def test_set_pin_flushes_conntrack_for_caller_saddr(
     assert resp.status == 200
 
     reconciler.flush_conntrack.assert_awaited_once_with("127.0.0.1")
-    # Order: reconcile runs before flush_conntrack.
-    reconcile_call = reconciler.reconcile.await_args_list[0]
-    flush_call = reconciler.flush_conntrack.await_args_list[0]
-    # awaitlist is ordered by completion of the AsyncMock; for a single
-    # event-loop sequential await both calls land in the order issued.
-    # Use mock_calls on the parent Mock to verify global ordering:
+    # Order: reconcile runs before flush_conntrack.  Use mock_calls on
+    # the parent Mock to verify global ordering — AsyncMock's per-method
+    # await_args_list cannot reveal ordering across different methods.
     method_names = [c[0] for c in reconciler.method_calls]
     assert method_names.index("reconcile") < method_names.index("flush_conntrack")
 
@@ -144,9 +141,9 @@ async def test_clear_pin_flushes_conntrack_for_caller_saddr(
     manager.snapshot.return_value = {}
     resp = await cli.get("/api/pin/clear")
     assert resp.status == 200
-    reconciler.flush_conntrack.assert_awaited_once_with("192.0.2.42") if False else None
     # The aiohttp test client connects from 127.0.0.1 — assert against
-    # whatever request.remote returned, not a hard-coded value.
+    # whatever request.remote returned, not a hard-coded value.  Pin the
+    # exact saddr below for clarity.
     reconciler.flush_conntrack.assert_awaited_once()
     flush_saddr = reconciler.flush_conntrack.await_args.args[0]
     # request.remote on aiohttp_client loopback transport is "127.0.0.1".

@@ -129,25 +129,18 @@ def test_classification_rules_use_pin_marks_starting_at_0xA00():
     assert "ip saddr @pinned_outer_pt meta mark set 0xa01" in ruleset
 
 
-def test_classification_rules_also_stamp_ct_mark_for_post_pin_flush():
-    """Each pin classification rule must stamp `ct mark` alongside
-    `meta mark` so the conntrack flow inherits the per-egress
-    discriminator.
+def test_classification_rules_do_not_stamp_ct_mark():
+    """Classification rules must set ONLY `meta mark`, NOT `ct mark`.
 
-    Why ct mark, not just packet mark: kernel conntrack stores the
-    associated ct mark verbatim in /proc/net/nf_conntrack.  When a
-    pin changes we want to drop ONLY the forwarded user flows that
-    inherited the OLD ct mark — not the local portal HTTP
-    connections (which never traverse this chain and therefore have
-    ct mark 0).  Without this stamp the only way to flush stale
-    forwarded flows is `conntrack -D -s <saddr>` which collaterally
-    kills the very portal connection that asked for the pin change,
-    causing the issuing browser tab to time out.
+    The Python conntrack flush (pyroute2.Conntrack) filters flows by
+    saddr and portal-tuple exclusion directly — it no longer needs a
+    ct mark discriminator stamped in the kernel flow table.  Stamping
+    ct mark adds unused kernel state and was the source of a previous
+    correctness bug (portal connections were killed by the ct mark
+    filter despite not being forwarded traffic).
 
-    Pinning marks live in 0x0A00..0x0AFF (PIN_MARK_BASE + index).
-    Mask 0xff00 isolates that range from any other ct mark scheme
-    (PBR uses 0x200, DNS uses 0x201 in `meta mark` only — these never
-    end up as ct marks because no rule sets them on ct).
+    If this test fails, someone re-added `ct mark set` to the
+    classification rules.  Remove it and update the flush logic.
     """
     ruleset = NftRenderer(
         catalog={"outer-de": object(), "outer-pt": object()},
@@ -155,21 +148,46 @@ def test_classification_rules_also_stamp_ct_mark_for_post_pin_flush():
         portal_port=1,
         api_port=80,
     ).render(pins={})
-    # Both marks must be set on the same line (same packet match) so
-    # they cannot diverge under partial rule failure.  nft accepts
-    # multiple statements on one rule line; kernel applies them
-    # atomically.
-    assert (
-        "ip saddr @pinned_outer_de meta mark set 0xa00 ct mark set 0xa00"
-        in ruleset
-    ), (
-        "first egress must stamp both packet mark and ct mark with "
-        "the same per-egress value (0xA00 + index)"
+    # classification lines must NOT contain ct mark
+    for line in ruleset.splitlines():
+        if "ip saddr @pinned_" in line and "meta mark set" in line:
+            assert "ct mark set" not in line, (
+                f"classification rule must not stamp ct mark: {line!r}"
+            )
+
+
+def test_nft_renderer_exposes_portal_addr_property():
+    """NftRenderer.portal_addr is part of the public API.
+
+    KernelReconciler.flush_conntrack reads portal_addr/portal_port from
+    the renderer to spare the portal TCP tuple during conntrack flush
+    (see test_flush_conntrack_skips_portal_tuple_tcp for the behavioural
+    side).  This test pins the API contract so that renaming the
+    underlying attribute to private (`_portal_addr`) or removing the
+    property fails fast — independent of any flush_conntrack mock setup.
+    """
+    renderer = NftRenderer(
+        catalog={"hub": object()},
+        portal_addr="192.0.2.7",
+        portal_port=1234,
+        api_port=8080,
     )
-    assert (
-        "ip saddr @pinned_outer_pt meta mark set 0xa01 ct mark set 0xa01"
-        in ruleset
+    assert renderer.portal_addr == "192.0.2.7"
+
+
+def test_nft_renderer_exposes_portal_port_property():
+    """NftRenderer.portal_port is part of the public API.
+
+    See test_nft_renderer_exposes_portal_addr_property for rationale.
+    Behavioural coverage is in test_flush_conntrack_skips_portal_tuple_tcp.
+    """
+    renderer = NftRenderer(
+        catalog={"hub": object()},
+        portal_addr="192.0.2.7",
+        portal_port=1234,
+        api_port=8080,
     )
+    assert renderer.portal_port == 1234
 
 
 def test_filter_prerouting_bypasses_portal_destination_before_classification():
@@ -179,11 +197,18 @@ def test_filter_prerouting_bypasses_portal_destination_before_classification():
     Portal-bound packets (iifname=backbone, daddr=portal_addr,
     tcp dport=portal_port) traverse BOTH the nat chain (which does
     REDIRECT) AND this filter chain — they share the prerouting hook.
-    Without an early-return guard the filter chain would stamp ct mark
-    on the portal flow's first packet, and a subsequent
-    `conntrack -D --mark <pinning>/0xff00` would then sweep the
-    portal connection alongside the genuinely-forwarded user flows,
-    timing out the in-flight HTTP request that issued the pin change.
+    Without an early-return guard the filter chain would stamp the
+    per-egress `meta mark` on the portal flow, sending its response
+    packets through the wrong routing table.  The guard keeps portal
+    traffic on the host's main routing table so the local API listener
+    receives and replies to the redirected connection cleanly.
+
+    Semantic alignment: the Python conntrack flush
+    (KernelReconciler.flush_conntrack) spares the same TCP tuple
+    (proto=6 ∧ daddr=portal_addr ∧ dport=portal_port).  Both the nft
+    guard and the flush exception use the exact same coordinates so a
+    portal connection can never be marked nor torn down by a pin
+    change.
 
     The guard MUST come before the saddr-set lookups so the early
     return wins regardless of pinning state.  We anchor it after the
@@ -221,17 +246,13 @@ def test_filter_prerouting_bypasses_portal_destination_before_classification():
 def test_portal_redirect_does_not_set_ct_mark():
     """The portal NAT redirect rule must NOT stamp ct mark.
 
-    Portal connections (browser → 1.1.1.1:1111 redirected to local
-    :80) live in a separate flow from the forwarded user traffic
-    they administer.  When a pin change triggers a flush by ct
-    mark / pin-mask, portal connections must remain untouched —
-    otherwise the very HTTP request that issued the pin change
-    times out because its conntrack flow vanished mid-response.
-
-    We assert by structural property: the only place ct mark gets
-    set in the rendered ruleset is inside the filter classification
-    chain (the `prerouting` chain after the iifname / private guard),
-    never on the portal redirect line.
+    The current pinning ruleset does not stamp `ct mark` anywhere —
+    the conntrack flush is now done in Python (pyroute2.Conntrack)
+    against the orig-direction tuple, with no ct-mark discriminator.
+    This test pins that the portal redirect line in particular stays
+    free of `ct mark` so that re-introducing a ct-mark scheme later
+    (e.g. for a different subsystem) cannot accidentally tag portal
+    connections without explicit consideration of the flush logic.
     """
     ruleset = NftRenderer(
         catalog={"hub": object()},

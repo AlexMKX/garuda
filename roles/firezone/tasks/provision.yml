@@ -6,6 +6,33 @@
   ansible.builtin.assert:
     that: fz_admin_password is not defined or fz_admin_password | length >= 12
 
+# Universally-true firezone label defaults.  Callers (locals.tf in each
+# stand-up) used to repeat `garuda.frr.ospf.redistribute = "kernel"` on
+# every firezone instance; mirror the ipt_server provision pattern and
+# publish it from the role so callers no longer need to.
+#
+# Why redistribute=kernel: firezone announces the wg-firezone client
+# subnet (default 10.0.24.0/24) to OSPF peers so transit hosts can
+# return traffic to clients without per-hop SNAT.  Firezone installs
+# its client routes into the kernel main table as `proto boot`, and
+# the wg-firezone iface address is /32 (so `redistribute connected`
+# does not pick up the subnet).  `redistribute kernel` covers
+# kernel-installed routes regardless of source proto, which is what
+# we need.
+#
+# Stand-specific labels (router_id, interfaces, default_originate)
+# stay caller-provided — they cannot be hardcoded in the role.
+#
+# Caller wins: combine() puts the constants on the left and the
+# caller's firezone_labels on the right, so a caller-supplied value
+# for the same key overrides the role default.
+- name: Merge firezone constant labels with caller-supplied labels
+  ansible.builtin.set_fact:
+    firezone_labels: "{{ _firezone_constant_labels | combine(firezone_labels | default({})) }}"
+  vars:
+    _firezone_constant_labels:
+      garuda.frr.ospf.redistribute: "kernel"
+
 - name: Ensure firezone_dir exists
   ansible.builtin.file:
     path: "{{ fz_firezone_dir }}"

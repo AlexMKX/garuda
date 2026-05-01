@@ -9,6 +9,12 @@
   dns_dnat_ipt_server short-circuits on `meta mark & 0x800 != 0 return`,
   so a pinned saddr's DNS keeps its original dst and is forwarded by
   the per-egress routing table.
+
+  ct mark is NOT stamped on classification rules.  The conntrack flush
+  (KernelReconciler.flush_conntrack) uses pyroute2.Conntrack to iterate
+  flows directly in Python, filtering by saddr and excluding the portal
+  TCP tuple.  The ct mark discriminator is therefore not needed and
+  would only add unused state to the kernel conntrack table.
 #}
 table ip pinning {
     set private_subnets {
@@ -50,17 +56,14 @@ table ip pinning {
 
         # Don't classify portal-bound traffic.  The nat chain above
         # REDIRECTs portal flows to the local API listener; both
-        # chains share the prerouting hook, so without this early
-        # return the portal flow would inherit a per-egress ct mark.
-        # A subsequent `conntrack -D --mark <pinning>/0xff00` (issued
-        # right after a pin change) would then sweep the portal
-        # connection alongside genuinely-forwarded user flows,
-        # timing out the in-flight HTTP request that asked for the
-        # pin change in the first place.
+        # chains share the prerouting hook.  The guard here ensures
+        # portal flows never receive a per-egress meta mark —
+        # keeping semantics aligned with the Python conntrack flush
+        # that also spares TCP flows to portal_addr:portal_port.
         ip daddr {{ portal_addr }} tcp dport {{ portal_port }} return
 
 {% for e in egresses %}
-        ip saddr @{{ e.set_name }} meta mark set {{ "0x%x" % e.mark }} ct mark set {{ "0x%x" % e.mark }}
+        ip saddr @{{ e.set_name }} meta mark set {{ "0x%x" % e.mark }}
 {% endfor %}
     }
 }

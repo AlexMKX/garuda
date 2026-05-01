@@ -234,116 +234,338 @@ def test_update_egress_liveness_dead_writes_blackhole():
         pr_patcher.stop()
 
 
-def test_flush_conntrack_filters_by_saddr_and_pinning_mark_mask():
-    """flush_conntrack(saddr) drops ONLY flows that were classified by
-    the pinning chain (ct mark in 0xA00..0xAFF), leaving local portal
-    HTTP connections alone (their ct mark is 0).
+def _make_conntrack_entry(saddr, daddr, dport, proto=6):
+    """Build a mock ConntrackEntry whose tuple_orig has the given fields."""
+    tup = MagicMock()
+    tup.saddr = saddr
+    tup.daddr = daddr
+    tup.dport = dport
+    tup.proto = proto
+    entry = MagicMock()
+    entry.tuple_orig = tup
+    return entry
 
-    Without the mark-mask filter, `conntrack -D -s <saddr>` is too
-    broad: it also kills the browser-to-portal HTTP connection that
-    just issued the pin change.  The kernel forgets the redirect
-    DNAT mapping, the in-flight HTTP response cannot be matched
-    back to the open TCP socket, and curl / the browser tab times
-    out instead of getting its 200 (or 303 for the html redirect).
 
-    The pinning chain stamps `ct mark` alongside `meta mark` on
-    every classification rule (see test_classification_rules_also_
-    stamp_ct_mark_for_post_pin_flush).  PIN_MARK_BASE=0xA00, masks
-    are 0xff00 to cover up to 256 egresses without overlapping
-    PBR_MARK (0x200 family) or DNS_MARK (0x201).
+def _make_conntrack_ctx(entries=None, dump_raises=None):
+    """Patch pyroute2.Conntrack used by KernelReconciler.
 
-    argv contract: explicit -s and --mark to keep the shell-out
-    surface zero and the tuple search the kernel performs as
-    narrow as possible.
+    Returns (patcher, ct_instance_mock).
+    The ct_instance_mock is the object returned by `Conntrack().__enter__`.
     """
-    from pinning.nft_renderer import PIN_MARK_BASE
+    patcher = patch("pinning.kernel.Conntrack")
+    cls = patcher.start()
+    instance = MagicMock()
+    cls.return_value.__enter__.return_value = instance
+    cls.return_value.__exit__.return_value = False
+    if dump_raises is not None:
+        instance.dump_entries.side_effect = dump_raises
+    else:
+        instance.dump_entries.return_value = entries or []
+    return patcher, instance
+
+
+def test_flush_conntrack_deletes_matching_saddr_flows():
+    """flush_conntrack(saddr) calls ct.entry('del') for every flow
+    whose tuple_orig.saddr matches and is not the portal tuple.
+
+    Uses pyroute2.Conntrack directly; no subprocess.
+    """
     pr_patcher, _ = _make_iproute_ctx()
     nft_patcher, _ = _make_nft_ctx()
-    run_patcher = patch("pinning.kernel.subprocess.run")
-    run_mock = run_patcher.start()
-    run_mock.return_value = MagicMock(returncode=0, stdout="", stderr="")
+    entries = [
+        _make_conntrack_entry("192.0.2.42", "203.0.113.5", 443),   # should delete
+        _make_conntrack_entry("192.0.2.99", "203.0.113.5", 443),   # wrong saddr — skip
+        _make_conntrack_entry("192.0.2.42", "203.0.113.5", 80),    # should delete
+    ]
+    ct_patcher, ct_mock = _make_conntrack_ctx(entries=entries)
     try:
         rec = KernelReconciler(
             catalog=_catalog("hub"),
             portal_addr="192.0.2.1",
-            portal_port=1,
+            portal_port=1111,
             api_port=80,
         )
         asyncio.run(rec.flush_conntrack("192.0.2.42"))
 
-        assert run_mock.call_count == 1
-        argv = run_mock.call_args.args[0]
-        assert argv[0] == "conntrack"
-        assert "-D" in argv
-
-        # -s with the saddr value passed as a separate argv element so
-        # there is no shell interpolation surface.
-        s_idx = argv.index("-s")
-        assert argv[s_idx + 1] == "192.0.2.42"
-
-        # --mark with mask covering the entire pinning mark range.
-        # PIN_MARK_BASE=0xA00, mask=0xff00 covers 0xA00..0xAFF.
-        # Format: "<mark>/<mask>" per conntrack-tools convention.
-        # We render hex/hex for self-documenting argv readable in
-        # log lines and strace dumps without a mental decimal⇄hex
-        # conversion.
-        m_idx = argv.index("--mark")
-        assert argv[m_idx + 1] == f"{PIN_MARK_BASE:#x}/0xff00", (
-            f"--mark must be PIN_MARK_BASE/0xff00 to match the entire "
-            f"pinning mark range while excluding portal connections "
-            f"(ct mark 0); got {argv[m_idx + 1]!r}"
-        )
+        # Two matching entries: the "192.0.2.42" non-portal flows.
+        assert ct_mock.entry.call_count == 2
+        for call in ct_mock.entry.call_args_list:
+            assert call.args[0] == "del"
     finally:
-        run_patcher.stop()
+        ct_patcher.stop()
         pr_patcher.stop()
         nft_patcher.stop()
 
 
-def test_flush_conntrack_swallows_nonzero_exit_codes():
-    """conntrack returns 1 when no flows match; callers should treat
-    that as a no-op success, not an error.  flush_conntrack must not
-    raise in that case (nor on any other rc) — this is best-effort
-    cleanup paired with a successful reconcile, and surfacing
-    subprocess failures here would gate user-visible pin changes on
-    a kernel state we cannot do anything about."""
+def test_flush_conntrack_skips_portal_tuple_tcp():
+    """flush_conntrack must NOT delete the portal TCP flow.
+
+    The portal connection (browser → portal_addr:portal_port, proto=TCP)
+    must survive the flush so the in-flight HTTP request that issued the
+    pin change gets its response.  Killing it causes the browser tab to
+    time out waiting for a response whose conntrack DNAT mapping has
+    vanished.
+    """
     pr_patcher, _ = _make_iproute_ctx()
     nft_patcher, _ = _make_nft_ctx()
-    run_patcher = patch("pinning.kernel.subprocess.run")
-    run_mock = run_patcher.start()
-    run_mock.return_value = MagicMock(returncode=1, stdout="", stderr="0 flow entries have been deleted.")
+    entries = [
+        # portal TCP flow — must NOT be deleted
+        _make_conntrack_entry("192.0.2.42", "192.0.2.1", 1111, proto=6),
+        # regular forwarded flow — should be deleted
+        _make_conntrack_entry("192.0.2.42", "203.0.113.5", 443, proto=6),
+    ]
+    ct_patcher, ct_mock = _make_conntrack_ctx(entries=entries)
     try:
         rec = KernelReconciler(
             catalog=_catalog("hub"),
             portal_addr="192.0.2.1",
-            portal_port=1,
+            portal_port=1111,
             api_port=80,
         )
-        # MUST NOT raise:
         asyncio.run(rec.flush_conntrack("192.0.2.42"))
+
+        # Exactly one delete call — the non-portal forwarded flow.
+        assert ct_mock.entry.call_count == 1
+        # The deleted tuple must be the forwarded flow, NOT the portal one.
+        deleted_tup = ct_mock.entry.call_args.kwargs["tuple_orig"]
+        assert deleted_tup.daddr == "203.0.113.5", (
+            f"expected forwarded-flow daddr 203.0.113.5 to be deleted; "
+            f"got daddr={deleted_tup.daddr!r} (portal tuple was "
+            f"daddr=192.0.2.1 — that flow must survive)"
+        )
+        assert deleted_tup.dport == 443
     finally:
-        run_patcher.stop()
+        ct_patcher.stop()
         pr_patcher.stop()
         nft_patcher.stop()
 
 
-def test_flush_conntrack_swallows_filenotfounderror_when_binary_missing():
-    """If the conntrack CLI is not installed we still want pin
-    operations to succeed — the flush is a UX latency improvement,
-    not a correctness requirement.  Log and move on."""
+def test_flush_conntrack_does_not_skip_udp_to_portal_coordinates():
+    """A UDP flow to the same daddr+dport as the portal is NOT spared.
+
+    The nft portal-bypass guard is `tcp dport <port>` — it only
+    intercepts TCP.  A UDP datagram to portal_addr+portal_port is
+    ordinary forwarded traffic and must be flushed alongside the rest.
+    """
     pr_patcher, _ = _make_iproute_ctx()
     nft_patcher, _ = _make_nft_ctx()
-    run_patcher = patch("pinning.kernel.subprocess.run", side_effect=FileNotFoundError())
-    run_patcher.start()
+    entries = [
+        # UDP to portal coordinates — must be deleted (not spared)
+        _make_conntrack_entry("192.0.2.42", "192.0.2.1", 1111, proto=17),
+    ]
+    ct_patcher, ct_mock = _make_conntrack_ctx(entries=entries)
     try:
         rec = KernelReconciler(
             catalog=_catalog("hub"),
             portal_addr="192.0.2.1",
-            portal_port=1,
+            portal_port=1111,
             api_port=80,
         )
         asyncio.run(rec.flush_conntrack("192.0.2.42"))
+
+        assert ct_mock.entry.call_count == 1, (
+            "UDP flow to portal coordinates must be flushed; "
+            "portal exception is TCP-only"
+        )
     finally:
-        run_patcher.stop()
+        ct_patcher.stop()
+        pr_patcher.stop()
+        nft_patcher.stop()
+
+
+def test_flush_conntrack_skips_entry_with_unreadable_tuple():
+    """Entries that raise on tuple_orig attribute access are skipped.
+
+    The bare except in the filter loop is conservatively-correct:
+    an entry we cannot fully evaluate (e.g. a malformed entry where
+    even saddr access raises) is NOT deleted.  The flush must not
+    crash; processing continues for remaining entries.
+    """
+    pr_patcher, _ = _make_iproute_ctx()
+    nft_patcher, _ = _make_nft_ctx()
+
+    # Build a bad entry whose .saddr raises (truly unreadable)
+    bad_tup = MagicMock()
+    type(bad_tup).saddr = property(
+        lambda self: (_ for _ in ()).throw(AttributeError("saddr"))
+    )
+    bad_entry = MagicMock()
+    bad_entry.tuple_orig = bad_tup
+
+    # Good entry that should still be processed after the bad one
+    good_entry = _make_conntrack_entry("192.0.2.42", "203.0.113.5", 443)
+
+    ct_patcher, ct_mock = _make_conntrack_ctx(entries=[bad_entry, good_entry])
+    try:
+        rec = KernelReconciler(
+            catalog=_catalog("hub"),
+            portal_addr="192.0.2.1",
+            portal_port=1111,
+            api_port=80,
+        )
+        # Must not raise; bad entry is skipped, good entry is deleted.
+        asyncio.run(rec.flush_conntrack("192.0.2.42"))
+        # The good entry (matching saddr, non-portal) must still be deleted.
+        assert ct_mock.entry.call_count == 1
+    finally:
+        ct_patcher.stop()
+        pr_patcher.stop()
+        nft_patcher.stop()
+
+
+def test_flush_conntrack_continues_after_per_tuple_delete_failure():
+    """If entry('del') raises for one tuple, remaining matches are
+    still deleted.
+
+    Common cause: a parallel TTL sweep or another flush already
+    removed the same flow.  The exception must not abort the loop.
+    """
+    pr_patcher, _ = _make_iproute_ctx()
+    nft_patcher, _ = _make_nft_ctx()
+    entries = [
+        _make_conntrack_entry("192.0.2.42", "203.0.113.1", 443),
+        _make_conntrack_entry("192.0.2.42", "203.0.113.2", 443),
+        _make_conntrack_entry("192.0.2.42", "203.0.113.3", 443),
+    ]
+    ct_patcher, ct_mock = _make_conntrack_ctx(entries=entries)
+    # First delete raises; second and third should still be attempted.
+    ct_mock.entry.side_effect = [RuntimeError("race"), None, None]
+    try:
+        rec = KernelReconciler(
+            catalog=_catalog("hub"),
+            portal_addr="192.0.2.1",
+            portal_port=1111,
+            api_port=80,
+        )
+        # Must not raise.
+        asyncio.run(rec.flush_conntrack("192.0.2.42"))
+        assert ct_mock.entry.call_count == 3
+    finally:
+        ct_patcher.stop()
+        pr_patcher.stop()
+        nft_patcher.stop()
+
+
+def test_flush_conntrack_materializes_before_delete():
+    """All dump_entries() entries are consumed before the first delete.
+
+    pyroute2 0.9.x's _generate_with_cleanup closes the thread-local
+    event loop when the dump generator exits.  Interleaving delete
+    calls within the iteration trips 'Event loop is closed'.  The
+    implementation must collect all matches first, then delete.
+    """
+    pr_patcher, _ = _make_iproute_ctx()
+    nft_patcher, _ = _make_nft_ctx()
+
+    call_order = []
+
+    def track_dump():
+        call_order.append("dump_start")
+        yield _make_conntrack_entry("192.0.2.42", "203.0.113.5", 443)
+        yield _make_conntrack_entry("192.0.2.42", "203.0.113.5", 80)
+        call_order.append("dump_end")
+
+    ct_patcher = patch("pinning.kernel.Conntrack")
+    cls = ct_patcher.start()
+    instance = MagicMock()
+    cls.return_value.__enter__.return_value = instance
+    cls.return_value.__exit__.return_value = False
+    instance.dump_entries.side_effect = track_dump
+
+    def track_entry(op, **kwargs):
+        call_order.append("delete")
+
+    instance.entry.side_effect = track_entry
+    try:
+        rec = KernelReconciler(
+            catalog=_catalog("hub"),
+            portal_addr="192.0.2.1",
+            portal_port=1111,
+            api_port=80,
+        )
+        asyncio.run(rec.flush_conntrack("192.0.2.42"))
+
+        dump_end_idx = call_order.index("dump_end")
+        first_delete_idx = next(
+            i for i, v in enumerate(call_order) if v == "delete"
+        )
+        assert dump_end_idx < first_delete_idx, (
+            f"dump must complete before first delete; order={call_order}"
+        )
+    finally:
+        ct_patcher.stop()
+        pr_patcher.stop()
+        nft_patcher.stop()
+
+
+def test_flush_conntrack_deletes_collected_tuples_when_dump_raises_mid_iteration():
+    """Partial dump must not abort the flush.
+
+    pyroute2's dump_entries() can raise mid-iteration (netlink error,
+    socket reset, kernel-side rate limit).  The two-phase shape was
+    chosen specifically so anything materialised before the exception
+    still gets deleted in phase 2 — the spec requires "whatever was
+    materialized so far still gets deleted".
+
+    Wrapping the entire body in one outer try would discard the
+    partial matches and leave stale forwarded flows in the kernel —
+    exactly the failure mode this fix is meant to prevent.
+    """
+    pr_patcher, _ = _make_iproute_ctx()
+    nft_patcher, _ = _make_nft_ctx()
+
+    def half_then_raise():
+        # Yield two matching entries, then blow up.
+        yield _make_conntrack_entry("192.0.2.42", "203.0.113.5", 443)
+        yield _make_conntrack_entry("192.0.2.42", "203.0.113.6", 443)
+        raise OSError("netlink reset mid-dump")
+
+    ct_patcher = patch("pinning.kernel.Conntrack")
+    cls = ct_patcher.start()
+    instance = MagicMock()
+    cls.return_value.__enter__.return_value = instance
+    cls.return_value.__exit__.return_value = False
+    instance.dump_entries.side_effect = half_then_raise
+    try:
+        rec = KernelReconciler(
+            catalog=_catalog("hub"),
+            portal_addr="192.0.2.1",
+            portal_port=1111,
+            api_port=80,
+        )
+        # Must not raise.
+        asyncio.run(rec.flush_conntrack("192.0.2.42"))
+
+        # Both materialised tuples must still be deleted.
+        assert instance.entry.call_count == 2, (
+            f"expected both partial-dump tuples to be deleted; "
+            f"got {instance.entry.call_count}"
+        )
+    finally:
+        ct_patcher.stop()
+        pr_patcher.stop()
+        nft_patcher.stop()
+
+
+def test_flush_conntrack_does_not_raise_when_conntrack_open_fails():
+    """If Conntrack() raises (e.g. netlink unavailable), flush must
+    swallow the exception — pin state is already correct in nft.
+    """
+    pr_patcher, _ = _make_iproute_ctx()
+    nft_patcher, _ = _make_nft_ctx()
+    ct_patcher = patch("pinning.kernel.Conntrack", side_effect=OSError("no netlink"))
+    ct_patcher.start()
+    try:
+        rec = KernelReconciler(
+            catalog=_catalog("hub"),
+            portal_addr="192.0.2.1",
+            portal_port=1111,
+            api_port=80,
+        )
+        # Must not raise.
+        asyncio.run(rec.flush_conntrack("192.0.2.42"))
+    finally:
+        ct_patcher.stop()
         pr_patcher.stop()
         nft_patcher.stop()
 

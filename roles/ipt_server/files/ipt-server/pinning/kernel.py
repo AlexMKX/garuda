@@ -22,11 +22,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import subprocess
 from typing import Dict, Mapping, Optional
 
 import nftables
-from pyroute2 import IPRoute
+from pyroute2 import Conntrack, IPRoute
 
 from pinning.nft_renderer import PIN_MARK_BASE, NftRenderer
 
@@ -180,87 +179,124 @@ class KernelReconciler:
         ruleset = self._renderer.render(pins)
         await asyncio.to_thread(self._sync_apply_nft, ruleset)
 
-    # Mask isolating the pinning mark family (PIN_MARK_BASE..+0xff)
-    # from any other ct mark scheme present on the box.  The pinning
-    # nft chain stamps `ct mark = PIN_MARK_BASE+i` on classification;
-    # local portal HTTP connections never traverse that chain and
-    # therefore keep ct mark 0, which `--mark <pin>/0xff00` excludes.
-    _PIN_MARK_MASK: int = 0xff00
+    @staticmethod
+    def _sync_flush_conntrack(
+        saddr: str,
+        portal_addr: str,
+        portal_port: int,
+    ) -> None:
+        """Drop all conntrack flows from ``saddr`` except the portal tuple.
 
-    @classmethod
-    def _sync_flush_conntrack(cls, saddr: str) -> None:
-        """Drop kernel conntrack flows whose source matches ``saddr``
-        AND whose ct mark falls in the pinning range.
+        Iterates the kernel conntrack table via pyroute2.Conntrack and
+        deletes every entry whose orig-direction source matches ``saddr``,
+        with one exception: the portal TCP flow
+        (proto=6, daddr=portal_addr, dport=portal_port) is spared so the
+        browser tab that issued the pin change receives its HTTP response.
 
-        The ct mark filter is the critical part: a naive
-        `conntrack -D -s <saddr>` would also tear down the local
-        portal HTTP connection that just issued the pin change
-        (browser → 1.1.1.1:1111 → REDIRECT to local :80 — the flow
-        has saddr=<client> too).  Killing that flow mid-response
-        leaves the issuing curl/browser tab waiting forever for a
-        response whose conntrack DNAT mapping has vanished, manifest
-        as a 30-second timeout instead of the expected 200 / 303.
+        Two-phase (materialise then delete):
+        pyroute2 0.9.x's _generate_with_cleanup closes the thread-local
+        event loop when the dump generator is exhausted.  Interleaving
+        entry("del") calls within the iteration trips "Event loop is
+        closed" because the inner call's cleanup tears down the loop the
+        outer generator is still using.  Collect all matching tuples
+        first, delete afterwards.
 
-        With ct mark stamped only on forwarded user flows by the
-        pinning prerouting chain, `--mark PIN_MARK_BASE/0xff00`
-        deletes ONLY those flows.  Portal connections (ct mark 0)
-        survive untouched.
+        Portal-tuple exception is TCP-only (proto==6) — consistent with
+        the nft portal-bypass guard which is `tcp dport <portal_port>`.
+        A UDP flow to the same coordinates is ordinary forwarded traffic
+        and is flushed alongside the rest.
 
-        Best-effort: rc=1 means "no entries matched" and is fine the
-        moment after a fresh boot.  pin operations must not be gated
-        on the success of this cleanup — it exists purely so a
-        client's existing TCP sessions get re-established under the
-        freshly-rendered nft ruleset and the fwmark→table lookup it
-        implies, instead of riding on the conntrack-saved routing
-        decision from before the pin change.
+        Non-TCP/UDP entries (ICMP, etc.) may lack a `dport` attribute on
+        some pyroute2 builds.  The bare except is conservative: entries
+        we cannot fully evaluate are SKIPPED (not deleted).  Stale ICMP
+        entries are harmless and expire via conntrack TTL sweep.
+
+        Best-effort: any exception opening Conntrack or deleting a tuple
+        is logged and swallowed.  Pin state is already correct in nft by
+        the time this runs; raising here would mask success behind a
+        kernel state we cannot do anything about.
         """
-        argv = [
-            "conntrack",
-            "-D",
-            "-s", saddr,
-            "--mark", f"{PIN_MARK_BASE:#x}/{cls._PIN_MARK_MASK:#x}",
-        ]
         try:
-            result = subprocess.run(
-                argv,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-        except FileNotFoundError:
+            ct_ctx = Conntrack()
+        except Exception as exc:
             log.warning(
-                "pinning: conntrack binary not found; skipping flush for saddr=%s",
-                saddr,
+                "pinning: could not open Conntrack for saddr=%s: %s",
+                saddr, exc,
             )
             return
-        except subprocess.TimeoutExpired:
-            log.warning(
-                "pinning: %s timed out (5s); leaving stale flows",
-                " ".join(argv),
-            )
-            return
-        if result.returncode not in (0, 1):
-            # rc=1 is the "no matching flows" signal in conntrack-tools;
-            # treat anything else as a soft warning so we still have a
-            # log breadcrumb if the kernel module is missing or the
-            # netns lacks /proc/net/nf_conntrack visibility.
-            log.warning(
-                "pinning: %s returned rc=%d stderr=%r",
-                " ".join(argv), result.returncode, result.stderr.strip(),
-            )
+
+        with ct_ctx as ct:
+            # Phase 1: materialise matching tuples.
+            #
+            # The dump iteration has its own try/except so that a
+            # mid-iteration failure (netlink reset, kernel-side rate
+            # limit, etc.) does NOT skip phase 2.  Whatever was
+            # materialised before the failure still gets deleted —
+            # this is the contract the spec pins as "whatever was
+            # materialized so far still gets deleted".  Wrapping the
+            # whole body in one outer try would silently discard
+            # partial matches.
+            matches = []
+            try:
+                for entry in ct.dump_entries():
+                    try:
+                        tup = entry.tuple_orig
+                        if tup.saddr != saddr:
+                            continue
+                        # Portal-tuple exception: TCP flow to the portal
+                        # anchor that the browser uses to administer pins.
+                        if (
+                            tup.proto == 6
+                            and tup.daddr == portal_addr
+                            and tup.dport == portal_port
+                        ):
+                            continue
+                        matches.append(tup)
+                    except Exception:
+                        # Non-TCP/UDP entries may raise AttributeError on
+                        # .dport; skip conservatively.
+                        log.debug(
+                            "pinning: skipping conntrack entry with "
+                            "unreadable tuple (saddr=%s)", saddr,
+                        )
+            except Exception as exc:
+                log.warning(
+                    "pinning: dump_entries failed mid-iteration for "
+                    "saddr=%s after %d tuple(s) collected: %s",
+                    saddr, len(matches), exc,
+                )
+
+            # Phase 2: delete.  Per-tuple try/except absorbs parallel
+            # TTL-sweep races (another flush already removed the same
+            # tuple) without aborting the loop.
+            for tup in matches:
+                try:
+                    ct.entry("del", tuple_orig=tup)
+                except Exception as exc:
+                    log.warning(
+                        "pinning: could not delete conntrack entry "
+                        "saddr=%s dst=%s:%s: %s",
+                        saddr,
+                        getattr(tup, "daddr", "?"),
+                        getattr(tup, "dport", "?"),
+                        exc,
+                    )
 
     async def flush_conntrack(self, saddr: str) -> None:
-        """Async wrapper around ``conntrack -D -s <saddr>``.
+        """Flush all conntrack flows from ``saddr`` except the portal tuple.
 
-        Call this AFTER ``reconcile()`` so the next packet from
-        ``saddr`` enters the freshly-loaded `pinning prerouting` chain
-        with no inherited routing decision from the previous pin
-        state.  Without this hook the kernel's conntrack association
-        keeps long-lived TCP flows (HTTP/2, persistent connections)
-        on whatever route was selected when the original SYN was
-        committed, even though `meta mark set` re-fires on every
-        packet.  Browsers feel this as "I clicked the new egress but
-        my IP didn't change"; curl does not, because each curl
-        invocation is a fresh flow with no prior conntrack entry.
+        Call this AFTER ``reconcile()`` so the next packet from ``saddr``
+        enters the freshly-loaded pinning prerouting chain with no
+        inherited routing decision from the previous pin state.  Without
+        this flush the kernel conntrack association keeps long-lived TCP
+        flows (HTTP/2, persistent connections) on the old route even
+        though `meta mark set` re-fires on every new packet.  Browsers
+        observe this as "I switched egress but my external IP did not
+        change"; curl does not because each invocation is a fresh flow.
         """
-        await asyncio.to_thread(self._sync_flush_conntrack, saddr)
+        await asyncio.to_thread(
+            self._sync_flush_conntrack,
+            saddr,
+            self._renderer.portal_addr,
+            self._renderer.portal_port,
+        )
