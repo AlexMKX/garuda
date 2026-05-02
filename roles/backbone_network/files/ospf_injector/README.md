@@ -79,7 +79,7 @@ That ordering matters:
 
 - [FRR injector refactor design](../../../../docs/superpowers/specs/2026-04-06-frr-injector-refactor-design.md)
 - [Operator network manager design](../../../../docs/superpowers/specs/2026-04-08-operator-network-manager-design.md)
-- [Dynamic PBR transit watcher plan](../../../../docs/superpowers/plans/2026-04-06-dynamic-pbr-transit-watcher-plan.md)
+- [Dynamic PBR transit watcher design](../../../../docs/superpowers/specs/2026-04-06-dynamic-pbr-transit-watcher-design.md)
 
 Read those documents for design history. Read the package-local README files for
 the current operational contract.

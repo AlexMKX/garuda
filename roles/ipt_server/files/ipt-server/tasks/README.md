@@ -118,7 +118,6 @@ Use this rule of thumb when debugging:
 ## Relationship To Other Docs
 
 - [Gateway drift design](../../../../../docs/superpowers/specs/2026-04-10-ipt-server-gateway-watcher-design.md)
-- [Gateway watcher plan](../../../../../docs/superpowers/plans/2026-04-10-ipt-server-gateway-watcher.md)
 - [Interface snapshot ownership design](../../../../../docs/superpowers/specs/2026-04-11-ipt-server-interfaces-cache-ownership-design.md)
 - [ipt_server service overview](../readme.md)
 - [ipt_server configuration guide](../configuration.md)

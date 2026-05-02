@@ -95,7 +95,6 @@ downstream workload compose stack or sidecar reconcile depends on them.
 ## Relationship To Other Docs
 
 - [Operator network manager design](../../../../../docs/superpowers/specs/2026-04-08-operator-network-manager-design.md)
-- [Operator network manager plan](../../../../../docs/superpowers/plans/2026-04-08-operator-network-manager.md)
 - [OSPF injector package overview](../README.md)
 
 ## Key Code Entry Points

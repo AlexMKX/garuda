@@ -130,7 +130,6 @@ So `frr_injector` is the FRR-specific part of the operator, while
 
 - [FRR consumer](consumer.py)
 - [FRR injector entrypoint](main.py)
-- [FRR injector runtime](runtime.py)
 - [Transit label model](transit_config.py)
 - [OSPF label model](ospf_config.py)
 

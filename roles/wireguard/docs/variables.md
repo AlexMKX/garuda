@@ -348,7 +348,5 @@ wireguard_tunnel_config:
 
 ## See Also
 
-- [Example Playbook](example-mesh-deployment.yml)
 - [Example Inventory](example-inventory.yml)
 - [Role README](../README.md)
-

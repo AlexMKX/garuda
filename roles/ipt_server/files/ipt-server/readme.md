@@ -58,8 +58,8 @@ graph TD
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/ipt_server.git
-   cd ipt_server
+   git clone https://github.com/AlexMKX/garuda.git
+   cd garuda/roles/ipt_server/files/ipt-server
    ```
 
 2. Install dependencies:
@@ -67,7 +67,7 @@ graph TD
    pip install -r requirements.txt
    ```
 
-3. Prepare the configuration file (see [CONFIGURATION.md](CONFIGURATION.md)):
+3. Prepare the configuration file (see [configuration.md](configuration.md)):
    ```bash
    cp settings.example.yaml settings.yaml
    nano settings.yaml
@@ -91,7 +91,7 @@ docker run -d --network host --cap-add NET_ADMIN --cap-add NET_RAW -v $(pwd)/set
   {"query": "example.com", "content": "93.184.216.34", "name": "example.com", "type": 1}
   ```
 
-For detailed configuration options, see [CONFIGURATION.md](CONFIGURATION.md). For insights into TTL, NHG failover, and routing principles, refer to [FEATURES.md](FEATURES.md).
+For detailed configuration options, see [configuration.md](configuration.md). For insights into TTL, NHG failover, and routing principles, refer to [featues.md](featues.md).
 
 ## Contributing
 Feel free to open issues or submit pull requests. Ensure your changes are tested and documented.
@@ -102,4 +102,3 @@ MIT License
 
 
 ---
-
