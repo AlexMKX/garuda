@@ -55,9 +55,21 @@ locals {
     var.security_group_ids,
   )
 
-  managed_metadata = {
-    "ssh-keys"  = local.ssh_keys_metadata
-    "user-data" = local.cloud_init
-  }
+  # OS Login activation is opt-in (default false). Setting
+  # enable-oslogin=true makes the guest agent abandon metadata['ssh-keys']
+  # in favour of IAM-managed OS Login profiles; without org-level OS
+  # Login + per-user profile + compute.osLogin role this locks every
+  # account out of the VM, including the module-managed `garuda`
+  # deploy user. Flip the variable to true on the call site only when
+  # all three preconditions are in place.
+  oslogin_metadata = var.oslogin_enabled ? { "enable-oslogin" = "true" } : {}
+
+  managed_metadata = merge(
+    {
+      "ssh-keys"  = local.ssh_keys_metadata
+      "user-data" = local.cloud_init
+    },
+    local.oslogin_metadata,
+  )
   effective_metadata = merge(local.managed_metadata, var.metadata)
 }

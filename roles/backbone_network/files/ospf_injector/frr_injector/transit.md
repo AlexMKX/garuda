@@ -26,7 +26,7 @@ transit decision point.
 - DNS interception
 - geo-routing
 - choice of direct exit via `border`
-- choice of tunnel exit via `wg_uk`
+- choice of tunnel exit via a Linux egress peer such as `wg-edge`
 
 So transit routing is not just "send traffic to the internet". It is "send
 traffic to the workload that owns the project's egress policy".
@@ -38,7 +38,7 @@ traffic to the workload that owns the project's egress policy".
 The transit provider is the workload that advertises "send transit traffic to
 me".
 
-In the current `test-config/vpn2` topology, that workload is `ipt_server`.
+In the current reference topology, that workload is `ipt_server`.
 
 It is marked with:
 
@@ -52,7 +52,7 @@ This label means:
 - the workload is the next transit hop for consumers
 - the workload owns the business policy for further routing decisions
 
-In [the `test-config/vpn2` root topology](../../../../../test-config/vpn2/main.tf):
+Example provider label set (from a Garuda topology main.tf):
 
 ```hcl
 labels = {
@@ -85,18 +85,18 @@ This label means:
 - the sidecar should maintain a transit routing table pointing at the current
   transit provider
 
-In the current `test-config/vpn2` topology, the consumers are:
+In the current reference topology, the consumers are:
 
 - `firezone` with `garuda.transit.interfaces=wg-firezone`
-- `wg_tik` with `garuda.transit.interfaces=wg_tik`
+- a RouterOS-facing WireGuard peer with `garuda.transit.interfaces=wg-ros`
 
-Examples from [the `test-config/vpn2` topology facts](../../../../../test-config/vpn2/locals.tf):
+Example consumer label sets:
 
 ```hcl
 firezone = {
   labels = {
     "garuda.frr.ospf.enabled"           = "true"
-    "garuda.frr.ospf.router_id"         = "10.130.30.22"
+    "garuda.frr.ospf.router_id"         = "192.0.2.20"
     "garuda.frr.ospf.interfaces"        = "wg-firezone"
     "garuda.frr.ospf.active_interfaces" = ""
     "garuda.frr.ospf.default_originate" = "false"
@@ -104,15 +104,15 @@ firezone = {
   }
 }
 
-wg_tik = {
+wg_ros = {
   labels = {
-    rutestvpn = {
+    hub = {
       "garuda.frr.ospf.enabled"           = "true"
-      "garuda.frr.ospf.router_id"         = "10.130.30.21"
-      "garuda.frr.ospf.interfaces"        = "wg_tik"
-      "garuda.frr.ospf.active_interfaces" = "wg_tik"
+      "garuda.frr.ospf.router_id"         = "192.0.2.11"
+      "garuda.frr.ospf.interfaces"        = "wg-ros"
+      "garuda.frr.ospf.active_interfaces" = "wg-ros"
       "garuda.frr.ospf.default_originate" = "false"
-      "garuda.transit.interfaces"         = "wg_tik"
+      "garuda.transit.interfaces"         = "wg-ros"
     }
   }
 }
@@ -155,18 +155,14 @@ This gives a cleaner separation:
 - consumer: "this traffic must go to the transit policy node"
 - provider: "I decide where this traffic leaves the system"
 
-## Current test-config/vpn2 Topology
+## Reference Topology
 
-The live `rutestvpn` topology confirms this arrangement:
+In the reference topology (`examples/mini-site`):
 
-- `firezone-firezone-1` is attached to `backbone_network` with `172.30.0.10`
-- `wg_tik-wg_tik-1` is attached to `backbone_network` with `172.30.0.2`
-- `ipt_server-garuda_ipt-1` is attached to:
-  - `backbone_network` with `172.30.0.100`
-  - `border_network` with `172.29.0.3`
-- `wg_uk-wg_uk-1` is attached to:
-  - `backbone_network` with `172.30.0.3`
-  - `border_network` with `172.29.0.2`
+- `firezone` is attached to `backbone_network` (consumer).
+- A RouterOS-facing WireGuard peer is attached to `backbone_network` (consumer).
+- `ipt_server` is attached to both `backbone_network` and `border_network` (provider).
+- Edge WireGuard peers are attached to `backbone_network` and `border_network`.
 
 This matters because:
 
@@ -180,14 +176,14 @@ This matters because:
 ```mermaid
 flowchart LR
     Client1[Firezone Client] --> Firezone[firezone\nconsumer]
-    Client2[RouterOS / wg_tik traffic] --> WgTik[wg_tik\nconsumer]
+    Client2[RouterOS / wg-ros traffic] --> WgRos[wg-ros\nconsumer]
 
     Firezone -->|transit path over backbone| Ipt[ipt_server\ntransit provider]
-    WgTik -->|transit path over backbone| Ipt
+    WgRos -->|transit path over backbone| Ipt
 
     Ipt -->|direct egress| Border[border network]
-    Ipt -->|tunnel egress| WgUk[wg_uk exit node]
-    WgUk --> Internet[Internet / upstream]
+    Ipt -->|tunnel egress| WgEdge[wg-edge exit node]
+    WgEdge --> Internet[Internet / upstream]
     Border --> Internet
 ```
 
@@ -208,7 +204,7 @@ sequenceDiagram
     W->>C: Reconcile table 10000 default route
     C->>P: Forward transit traffic over backbone
     P->>P: Apply DNS and geo-routing policy
-    P->>Internet: Send traffic via border or wg_uk
+    P->>Internet: Send traffic via border or wg-edge
 ```
 
 ## What `transit_watcher.py` Actually Does
@@ -236,7 +232,7 @@ Business meaning:
 
 `transit_watcher.py` is not responsible for:
 
-- deciding whether traffic should leave via `border` or `wg_uk`
+- deciding whether traffic should leave via `border` or an egress peer such as `wg-edge`
 - implementing DNS interception
 - implementing geo-routing policies
 - creating Docker networks
@@ -257,31 +253,35 @@ Use `garuda.transit.provider=true` when a workload should advertise itself as th
 project's transit decision point.
 
 ```hcl
-module "ipt_server_main" {
+module "ipt_server_hub" {
   source = "../../modules/ipt_server"
 
-  nic_attach    = ["backbone", "border"]
-  backbone_ip   = local.workload_facts.ipt_server.backbone_ip
-  dataplane_ip  = local.workload_facts.ipt_server.dataplane_ip
-  frr_router_id = local.workload_facts.ipt_server.frr_router_id
+  name           = "ipt_server"
+  host_name      = "hub"
+  ipt_server_dir = "/opt/garuda/ipt_server"
+  nic_attach     = ["backbone", "border"]
+  connection_data = var.connection_data_hub
+  routes         = var.routes
 
   labels = {
-    "garuda.operator-scope"             = "backbone_network"
+    "garuda.operator-scope"             = var.base_domain
     "garuda.frr.ospf.enabled"           = "true"
-    "garuda.frr.ospf.router_id"         = local.workload_facts.ipt_server.frr_router_id
+    "garuda.frr.ospf.router_id"         = "192.0.2.30"
     "garuda.frr.ospf.interfaces"        = "backbone"
     "garuda.frr.ospf.active_interfaces" = "backbone"
     "garuda.frr.ospf.default_originate" = "true"
     "garuda.frr.ospf.redistribute"      = "kernel"
     "garuda.transit.provider"           = "true"
   }
+
+  depends_on = [module.backbone_network["hub"]]
 }
 ```
 
 Why:
 
 - `ipt_server` must be reachable from all transit consumers over `backbone`
-- it must also be able to exit via `border` or tunnel out via `wg_uk`
+- it must also be able to exit via `border` or tunnel out via an egress peer
 - it advertises the tagged OSPF default that consumers track
 
 ### Consumer example: `firezone`
@@ -290,23 +290,23 @@ Use `garuda.transit.interfaces=wg-firezone` when traffic entering `wg-firezone`
 must be handed to the transit provider.
 
 ```hcl
-module "firezone_main" {
+module "firezone_hub" {
   source = "../../modules/firezone"
 
-  backbone_network_name = "backbone_network"
-  backbone_ip           = local.workload_facts.firezone.backbone_ip
-  ipt_router_ip         = local.workload_facts.ipt_server.backbone_ip
-  client_interface      = local.workload_facts.firezone.client_interface
+  host_name       = "hub"
+  connection_data = var.connection_data_hub
 
   labels = {
     "garuda.frr.ospf.enabled"           = "true"
-    "garuda.frr.ospf.router_id"         = "10.130.30.22"
+    "garuda.frr.ospf.router_id"         = "192.0.2.20"
     "garuda.frr.ospf.interfaces"        = "wg-firezone"
     "garuda.frr.ospf.active_interfaces" = ""
     "garuda.frr.ospf.default_originate" = "false"
     "garuda.transit.interfaces"         = "wg-firezone"
-    "garuda.operator-scope"             = "backbone_network"
+    "garuda.operator-scope"             = var.base_domain
   }
+
+  depends_on = [module.backbone_network["hub"]]
 }
 ```
 
@@ -316,57 +316,54 @@ Why:
 - that traffic should not be locally egressed by Firezone
 - it should be handed to `ipt_server`, which owns DNS and geo-routing policy
 
-### Consumer example: `wg_tik`
+### Consumer example: RouterOS-facing WireGuard peer
 
-Use `garuda.transit.interfaces=wg_tik` when traffic entering the RouterOS tunnel
-must be handed to the transit provider.
-
-```hcl
-labels = merge(local.tunnel_facts.wg_tik.labels.rutestvpn, {
-  "garuda.operator-scope" = "backbone_network"
-})
-```
-
-The merged label set includes:
+Use `garuda.transit.interfaces=wg-ros` when traffic entering the
+RouterOS tunnel must be handed to the transit provider.
 
 ```hcl
-{
-  "garuda.frr.ospf.enabled"           = "true"
-  "garuda.frr.ospf.router_id"         = "10.130.30.21"
-  "garuda.frr.ospf.interfaces"        = "wg_tik"
-  "garuda.frr.ospf.active_interfaces" = "wg_tik"
-  "garuda.frr.ospf.default_originate" = "false"
-  "garuda.transit.interfaces"         = "wg_tik"
+module "wireguard_linux_ros_hub" {
+  # ...
+  labels = {
+    "garuda.frr.ospf.enabled"           = "true"
+    "garuda.frr.ospf.router_id"         = "192.0.2.11"
+    "garuda.frr.ospf.interfaces"        = "wg-ros"
+    "garuda.frr.ospf.active_interfaces" = "wg-ros"
+    "garuda.frr.ospf.default_originate" = "false"
+    "garuda.transit.interfaces"         = "wg-ros"
+    "garuda.operator-scope"             = "example.net"
+  }
 }
 ```
 
 Why:
 
-- `wg_tik` is an ingress point for RouterOS-related traffic
-- it should forward transit traffic to `ipt_server` instead of owning duplicate
-  egress policy locally
+- The RouterOS-facing tunnel is an ingress point for branch LAN traffic.
+- It should forward transit traffic to `ipt_server` instead of owning duplicate
+  egress policy locally.
 
-## Runtime Evidence From test-config/vpn2
+## Runtime Verification
 
-The `test-config/vpn2` verification checklist already encodes the expected runtime
-contract:
+The expected runtime contract:
 
-- consumer sidecar has `ip rule` for the ingress interface
-- consumer sidecar has `table 10000` default route via `172.30.0.100`
-- provider sidecar advertises a tagged type-5 default LSA
+- consumer sidecar has an `ip rule` for the ingress interface.
+- consumer sidecar has a `table 10000` default route via the provider's backbone IP.
+- provider sidecar advertises a tagged type-5 OSPF external default LSA.
 
-Examples from [the `test-config/vpn2` verification checklist](../../../../../test-config/vpn2/checklist.md):
+Verify:
 
 ```bash
-ssh vpn.example.com "sudo docker exec ospf-firezone-firezone-1 ip rule show | grep 10000"
-ssh vpn.example.com "sudo docker exec ospf-firezone-firezone-1 ip route show table 10000"
-ssh vpn.example.com "sudo docker exec ospf-ipt_server-garuda_ipt-1 vtysh -c 'show ip ospf database external'"
+# Consumer ip rule
+docker exec <consumer-sidecar> ip rule show | grep 10000
+
+# Consumer transit route
+docker exec <consumer-sidecar> ip route show table 10000
+
+# Provider OSPF external LSA
+docker exec <provider-sidecar> vtysh -c 'show ip ospf database external'
 ```
 
-Expected meaning:
-
-- consumer data plane points at the current provider
-- provider control plane advertises the transit default
+See [troubleshooting](../../../../../docs/operations/troubleshooting.md) for more diagnostic commands.
 
 ## Summary
 
@@ -374,8 +371,8 @@ Expected meaning:
   transit provider
 - transit provider = workload that owns project-specific egress policy
 - transit path = consumer-to-provider path over `backbone_network`
-- `ipt_server` is the current transit provider in `test-config/vpn2`
-- `firezone` and `wg_tik` are current transit consumers in `test-config/vpn2`
+- `ipt_server` is the current transit provider in the reference topology
+- `firezone` and the RouterOS-facing WireGuard peer are current transit consumers
 - `transit_watcher.py` keeps consumer runtime routing aligned with the current
   provider chosen by OSPF
 
@@ -384,5 +381,5 @@ Expected meaning:
 - [Transit label model](transit_config.py)
 - [FRR consumer](consumer.py)
 - [Transit watcher runtime](../../frr_sidecar/transit_watcher.py)
-- [Provider topology wiring](../../../../../test-config/vpn2/main.tf)
-- [Consumer topology facts](../../../../../test-config/vpn2/locals.tf)
+- [Reference topology](../../../../../docs/getting-started/reference-topology.md)
+- [Module index](../../../../../docs/reference/modules.md)

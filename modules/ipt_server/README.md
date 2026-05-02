@@ -14,7 +14,7 @@ Inputs:
 - `host_name` — inventory host running the IPT stack
 - `ipt_server_dir` — target directory for the IPT compose project
 - `interfaces` (default `["backbone"]`) — network interfaces for PBR/input handling
-- `routes` — ordered routing policy entries (list of `{route: [{gw?, dev?}], rules: [{net?, domain?, country?}]}`)
+- `routes` — ordered routing policy entries. Each entry is `{ route = list({gw?|dev?}), rules = list(string) }` with rule type inferred by `ipt_server`: CIDR → net, ISO 3166-1 alpha-2 code → country, anything else → domain regex.
 - `clean_conntrack` (default `true`) — clean conntrack state for managed flows
 - `domain_route_ttl` (default `300`) — TTL in seconds for domain-derived routing entries
 - `nic_attach` (default `[]`) — additional transport networks beyond backbone (which is mandatory and added by the role). Supported additional value: 'border'

@@ -12,7 +12,7 @@ variable "name" {
 }
 
 variable "subnet" {
-  description = "CIDR subnet for the point-to-point tunnel (e.g. 10.9.19.0/24)."
+  description = "CIDR subnet for the point-to-point tunnel (e.g. 192.0.2.0/28)."
   type        = string
 }
 

@@ -36,6 +36,12 @@ Role Variables
 This role is **deploy/bootstrap only**. OIDC and API configuration are handled by a
 separate role (`roles/firezone_oidc`).
 
+> **Production credential warning:** `fz_admin` and `fz_admin_password` must be
+> set to operator-controlled values in real deployments. The defaults
+> (`fz-admin@localhost` and a random 12-char string) are development/bootstrap
+> values only. The random default regenerates on each apply unless the caller
+> pins the value.
+
 ⚠ `fz_masquerade` — READ THIS BEFORE OVERRIDING
 -----------------------------------------------
 
@@ -108,7 +114,7 @@ Example Playbook
   roles:
     - firezone
   vars:
-    fz_server_url: http://your_firezone_host.tld
+    fz_server_url: https://firezone.example.net
 ```
 
 Testing

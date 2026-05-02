@@ -62,14 +62,27 @@ configuration.
 
 ## Quickstart
 
+The public example is a sanitized mini-site template; copy it before adding real
+cloud IDs or secrets. The `examples/mini-site` tree currently documents the
+expected layout; add the Terragrunt/OpenTofu files before running `terragrunt`
+commands.
+
 ```bash
-cd test-config/vpn2
-terraform init
-terraform apply
+cd examples/mini-site/infra
+terragrunt apply
+
+cd ../garuda
+terragrunt apply
+
+cd ../smoke
+ansible-playbook z2g.yml
 ```
 
+The `smoke/` directory describes the expected `z2g.yml` entrypoint. Wire the
+playbook before using this example for live verification.
+
 For first-run caveats (Firezone OIDC two-pass apply) see the
-[operations guide](docs/user-guide/05-operations.md#first-time-deploy).
+[deploy guide](docs/operations/deploy-update-destroy.md#first-time-deploy).
 
 ## Image source: pull (clients) vs build (developers)
 
@@ -100,13 +113,37 @@ the garuda-repo source tree on the controller.
 
 ## Documentation map
 
-User-facing:
+Concepts:
 
-1. [Overview — what Garuda is and why](docs/user-guide/01-overview.md)
-2. [Architecture — components and their roles](docs/user-guide/02-architecture.md)
-3. [Runtime processes — failover, OSPF, transit, health](docs/user-guide/03-processes.md)
-4. [Three-node example walkthrough (`test-config/vpn2`)](docs/user-guide/04-example-test-config-vpn2.md)
-5. [Operations — deploy, verify, update, destroy, troubleshoot](docs/user-guide/05-operations.md)
+1. [Overview — what Garuda is and why](docs/concepts/overview.md)
+2. [Architecture — components and their roles](docs/concepts/architecture.md)
+3. [Routing model — OSPF, transit, PBR, pinning](docs/concepts/routing-model.md)
+
+Getting started:
+
+4. [Prerequisites — tools and credentials](docs/getting-started/prerequisites.md)
+5. [Reference topology — mini-site walkthrough](docs/getting-started/reference-topology.md)
+6. [First deploy](docs/getting-started/first-deploy.md)
+
+How-to:
+
+7. [Define routing policy](docs/how-to/define-routing-policy.md)
+8. [Add a Linux egress](docs/how-to/add-linux-egress.md)
+9. [Add a WireGuard tunnel](docs/how-to/add-wireguard-tunnel.md)
+10. [Add a workload](docs/how-to/add-workload.md)
+
+Operations:
+
+- [Troubleshooting](docs/operations/troubleshooting.md)
+- [Smoke testing](docs/operations/smoke-testing.md)
+- [Deploy / update / destroy](docs/operations/deploy-update-destroy.md)
+
+Reference:
+
+- [Module index](docs/reference/modules.md)
+- [Label taxonomy](docs/reference/labels.md)
+- [connection_data contract](docs/reference/connection-data.md)
+- [Routing policy schema](docs/reference/routing-policy.md)
 
 Component-level contracts:
 
@@ -117,9 +154,4 @@ Component-level contracts:
 - [Sidecar operator runtime contract](roles/backbone_network/files/ospf_injector/sidecar_operator/README.md)
 - [FRR sidecar runtime contract](roles/backbone_network/files/frr_sidecar/README.md)
 - [ipt_server task layer](roles/ipt_server/files/ipt-server/tasks/README.md)
-- Terraform modules: see `modules/<name>/README.md`
-
-## `test-config/vpn2` verification
-
-- [Verification checklist](test-config/vpn2/checklist.md)
-- Final smoke: `ansible-playbook test-config/vpn2/smoke/z2g.yml` (see `AGENTS.md`).
+- Terraform modules: see `modules/*/README.md`

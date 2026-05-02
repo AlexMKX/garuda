@@ -162,8 +162,31 @@ EOT
   default     = []
 }
 
+variable "oslogin_enabled" {
+  description = <<EOT
+Activate Yandex Cloud OS Login on this instance by setting the
+`enable-oslogin=true` metadata key. Default `false`.
+
+IMPORTANT — opt-in by design. yandex-cloud-guest-agent (a fork of the
+Google Compute Engine guest agent) inherits its parent's behaviour:
+when `enable-oslogin=true` is set, the agent stops syncing
+`metadata["ssh-keys"]` into per-user `~/.ssh/authorized_keys`. Turning
+this on without (a) org-level OS Login enabled, (b) an OS Login
+profile on the connecting user, and (c) the `compute.osLogin` IAM
+role on the target cloud/folder will lock everyone out of the VM —
+including the module-managed `garuda` deploy user — because both
+channels end up unusable.
+
+Recommended rollout: enable on the call site only after the org-level
+toggle is on and at least one operator has an OS Login profile with
+an SSH key uploaded.
+EOT
+  type        = bool
+  default     = false
+}
+
 variable "metadata" {
-  description = "Additional instance metadata merged with module-managed keys (ssh-keys, user-data). User keys take precedence."
+  description = "Additional instance metadata merged with module-managed keys (ssh-keys, user-data, optionally enable-oslogin). User keys take precedence."
   type        = map(string)
   default     = {}
 }

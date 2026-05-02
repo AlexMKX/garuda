@@ -42,8 +42,8 @@ both rely on.
 
 If `nic_attach` does not include `border`, the container installs no NAT
 and no PBR at all (only the always-on MSS clamp). This is the correct
-configuration for transit-only leaves such as `wg-tik` whose traffic is
-forwarded to the egress workload (`wg-uk`, `wg-de`, ...) by `ipt_server`'s
+configuration for transit-only leaves such as a RouterOS-facing tunnel whose traffic is
+forwarded to egress workloads (for example `wg-edge`) by `ipt_server`'s
 geo-PBR.
 
 `net.ipv4.conf.all.rp_filter=2` (loose) is set on the container via Docker

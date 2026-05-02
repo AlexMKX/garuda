@@ -25,10 +25,37 @@ because YC may need to stop/start the instance to apply metadata changes.
 `ubuntu-2404-lts`. Default `image_family = "ubuntu-2404-lts-oslogin"`,
 and the variable validation rejects any value not matching `oslogin`.
 
-The `*-oslogin` name comes from the upstream Google Guest Agent (the
-yandex-cloud agent is a fork). It does **not** mean OS Login (centralised
-IAM-managed SSH) is enforced — keys still flow through
-`metadata["ssh-keys"]`.
+The `*-oslogin` name only means the agent is preinstalled — it does
+**not** by itself activate OS Login (IAM-managed SSH). Activation is a
+two-part contract; see below.
+
+## OS Login activation
+
+The module exposes `var.oslogin_enabled` (default **`false`** — opt-in)
+to set the per-instance `metadata["enable-oslogin"] = "true"` key.
+
+**Why opt-in.** yandex-cloud-guest-agent is a fork of the Google
+Compute Engine guest agent and inherits its switching logic: when
+`enable-oslogin=true` is set, the agent **stops** syncing
+`metadata["ssh-keys"]` into per-user `authorized_keys` and serves
+only IAM-managed OS Login profiles. Flipping the flag without the
+full prerequisite chain locks every account out of the VM, including
+the module-managed `garuda` deploy user.
+
+Prerequisites before setting `oslogin_enabled = true`:
+
+1. **Org-level toggle.** Enable OS Login at
+   *Cloud Organization → Access management → SSH access via OS Login*.
+   See <https://yandex.cloud/docs/organization/operations/os-login-access>.
+2. **OS Login profile** with an SSH key uploaded for every operator
+   (or service account) that needs SSH access. The agent creates the
+   linux user matching the profile's `login` field on first connect.
+3. **IAM role** `compute.osLogin` (or `compute.osAdminLogin` for
+   sudo) granted on the target cloud/folder.
+
+Once enabled, connect with `yc compute ssh --id <instance-id>` (uses
+a short-lived SSH certificate) or with a standard SSH client using
+the OS Login profile's login as the SSH user.
 
 ## Inputs
 
@@ -45,6 +72,7 @@ IAM-managed SSH) is enforced — keys still flow through
 | `nat`                     | `true`                           | Allocate public IPv4 via 1:1 NAT.                                      |
 | `ssh_user`                | `"garuda"`                       | Module-managed deploy user; auto-generated keypair binds to it.        |
 | `ssh_keys`                | `[]`                             | List of raw `user:public_key` lines for metadata['ssh-keys'].          |
+| `oslogin_enabled`         | `false`                          | Opt-in. When `true`, sets `metadata["enable-oslogin"]="true"` and the guest agent abandons `metadata["ssh-keys"]` in favour of OS Login profiles. Requires org-level OS Login + per-user profile + `compute.osLogin` role. |
 | `data_disk_size_gb`       | `0`                              | When > 0, create a new ext4 data disk and mount at `/opt/garuda`.      |
 | `existing_data_disk_id`   | `null`                           | Attach an existing disk by id instead of creating a new one.           |
 | `default_ingress`         | `true`                           | Create module-managed SG (SSH/HTTP/HTTPS/ICMP/UDP-all from 0.0.0.0/0). |

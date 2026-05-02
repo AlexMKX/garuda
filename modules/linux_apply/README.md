@@ -22,8 +22,9 @@ Inputs:
   fields are mutually exclusive — Terraform validates this at plan time.
   - `instance_token` (mandatory): opaque invalidation discriminator. Any
     change forces re-execution of the ansible runner for this host. By
-    convention populated with the cloud instance id (YC: `instance.id`,
-    GCP: `instance.self_link`); semantically the module accepts any string
+    convention populated with the cloud instance identifier (YC:
+    `yandex_compute_instance.id`, GCP: `google_compute_instance.self_link`);
+    semantically the module accepts any string
     that uniquely identifies a substrate generation.
 - `extra_hostvars`: optional additional hostvars
 - `destroy_payload_override`: optional alternative payload used only at destroy time
@@ -101,16 +102,16 @@ a short-lived materialized key file as follows:
 ```hcl
 module "apply_wg" {
   source        = "…/modules/linux_apply"
-  host_name     = "rutestvpn"
+  host_name     = "hub"
   workload_kind = "wireguard"
   payload       = { … }
 
   connection_data = {
-    host            = module.yc_rutestvpn.public_ipv4
+    host            = module.yc_hub.public_ipv4
     user            = "ubuntu"
     connection      = "ssh"
     network_os      = "linux"
-    ssh_private_key = module.yc_rutestvpn.ssh_private_key_openssh
+    ssh_private_key = module.yc_hub.ssh_private_key_openssh
   }
 }
 ```
@@ -155,3 +156,8 @@ host-key/multiplexing policy injected upstream.
 To override any default, set the corresponding env var in your
 Terragrunt root config (`extra_arguments { env_vars = { ... } }`) or
 shell environment before running `terragrunt apply`.
+
+## Related
+
+- [connection_data contract](../../docs/reference/connection-data.md)
+- [Module execution model](../../docs/reference/module-execution-model.md)

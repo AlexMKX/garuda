@@ -43,7 +43,7 @@ variable "peer" {
 }
 
 variable "subnet" {
-  description = "CIDR subnet of the WireGuard tunnel (e.g. 10.9.20.0/24)."
+  description = "CIDR subnet of the WireGuard tunnel (e.g. 198.51.100.0/28)."
   type        = string
 }
 

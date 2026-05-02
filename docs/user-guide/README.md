@@ -1,19 +1,11 @@
-# Garuda user guide
+# Moved
 
-This directory answers, in order of increasing detail:
+The old user-guide pages have moved into the current documentation structure:
 
-1. [What Garuda is and how it differs from a classic VPN](01-overview.md)
-2. [Which components make up the platform](02-architecture.md)
-3. [Which processes run at runtime (failover, OSPF, transit, health gates)](03-processes.md)
-4. [A worked three-node example based on `test-config/vpn2/`](04-example-test-config-vpn2.md)
-5. [Operational flows: deploy, verify, update, destroy, troubleshoot](05-operations.md)
+- Concepts: [`../concepts/`](../concepts/)
+- Getting started: [`../getting-started/`](../getting-started/)
+- How-to guides: [`../how-to/`](../how-to/)
+- Operations: [`../operations/`](../operations/)
+- Reference: [`../reference/`](../reference/)
 
-Detailed runtime contracts live next to the code they describe.
-Pages here link to them rather than restate them.
-
-Key component entry points:
-
-- Backbone operator: [`roles/backbone_network/files/ospf_injector/README.md`](../../roles/backbone_network/files/ospf_injector/README.md)
-- FRR sidecar: [`roles/backbone_network/files/frr_sidecar/README.md`](../../roles/backbone_network/files/frr_sidecar/README.md)
-- `ipt_server` task layer: [`roles/ipt_server/files/ipt-server/tasks/README.md`](../../roles/ipt_server/files/ipt-server/tasks/README.md)
-- Terraform modules: `modules/<name>/README.md`
+The files in this directory are compatibility redirects only.

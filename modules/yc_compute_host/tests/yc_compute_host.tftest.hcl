@@ -300,3 +300,39 @@ run "contract_connection_data_carries_instance_token" {
     error_message = "connection_data.instance_token must equal output.instance_id so VM recreation propagates to linux_apply triggers"
   }
 }
+
+run "contract_oslogin_default_false_omits_metadata_key" {
+  command = plan
+
+  assert {
+    condition     = !contains(keys(yandex_compute_instance.this.metadata), "enable-oslogin")
+    error_message = "enable-oslogin metadata key must be absent by default — opt-in only, otherwise guest agent stops syncing metadata['ssh-keys'] and locks everyone out"
+  }
+}
+
+run "contract_oslogin_enabled_sets_metadata_key" {
+  command = plan
+
+  variables {
+    oslogin_enabled = true
+  }
+
+  assert {
+    condition     = yandex_compute_instance.this.metadata["enable-oslogin"] == "true"
+    error_message = "oslogin_enabled=true must set enable-oslogin=true metadata"
+  }
+}
+
+run "contract_user_metadata_can_override_enable_oslogin" {
+  command = plan
+
+  variables {
+    oslogin_enabled = true
+    metadata        = { "enable-oslogin" = "false" }
+  }
+
+  assert {
+    condition     = yandex_compute_instance.this.metadata["enable-oslogin"] == "false"
+    error_message = "user-supplied metadata must win over module-managed enable-oslogin"
+  }
+}
