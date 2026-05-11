@@ -1,20 +1,14 @@
 ---
-# Purpose: Defaults for firezone_oidc role. Unpack the Terraform-supplied
-# `firezone_oidc_config` payload dict into role-facing variables.
+# Purpose: Defaults for firezone_oidc role.
 # Entry points: Loaded automatically by roles/firezone_oidc.
-# Inputs: firezone_oidc_config dict — set as a top-level var by linux_apply's
-#   apply_ansible_workload.yml wrapper, which publishes each key of the
-#   Terraform-rendered payload as a play-scope variable.
-# Outputs: Role-facing variables (firezone_oidc_dir, firezone_oidc_server_url,
-#   firezone_oidc_providers).
-# Side effects: None; variable defaults only.
+# Inputs: Flat top-level variables set by linux_apply's apply_ansible_workload.yml
+#   wrapper, which publishes each key of the Terraform-rendered payload as a
+#   play-scope variable.
+# Outputs: Role-facing variable defaults only.
+# Side effects: None.
 
-firezone_oidc_config: {}
+firezone_oidc_dir: /opt/garuda/firezone
+firezone_oidc_server_url: ""
+firezone_oidc_api_url: ""
 
-firezone_oidc_dir: "{{ firezone_oidc_config['firezone_dir'] | default('/opt/garuda/firezone') }}"
-firezone_oidc_server_url: "{{ firezone_oidc_config['server_url'] | default('') }}"
-firezone_oidc_providers: "{{ firezone_oidc_config['oidc_providers'] | default({}) }}"
-
-# firezone_oidc_api_url: (optional, no default)
-#   Override the internal API base URL (advanced). Defaults to the container
-#   bridge IP:13000.
+# firezone_oidc_providers: (no default — required in provision)

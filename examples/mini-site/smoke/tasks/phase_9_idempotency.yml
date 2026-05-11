@@ -1,0 +1,22 @@
+---
+# Checklist §9: terraform plan -detailed-exitcode.
+# Exit codes:
+#   0 = no changes (expected)
+#   1 = error
+#   2 = diff present (fail: non-idempotent apply)
+- name: "§9 — terragrunt plan -detailed-exitcode"
+  ansible.builtin.command:
+    cmd: terragrunt plan -detailed-exitcode -lock=false
+    chdir: "{{ z2g_terraform_dir }}"
+  register: _plan
+  changed_when: false
+  failed_when: _plan.rc not in [0, 2]
+
+- name: "§9 — assert no drift after apply"
+  ansible.builtin.assert:
+    that: _plan.rc == 0
+    fail_msg: |
+      terraform plan shows pending changes (rc={{ _plan.rc }}).
+      Apply is not idempotent. Inspect stdout:
+      {{ _plan.stdout }}
+    success_msg: "no drift — apply is idempotent"

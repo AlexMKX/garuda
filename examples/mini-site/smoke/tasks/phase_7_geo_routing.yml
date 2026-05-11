@@ -1,0 +1,237 @@
+---
+# Phase 7: geo routing (PBR on ipt_server), transit PBR on WG consumers,
+# OSPF type-5 LSA advertisement, and border NAT on wg_pt.
+# Only meaningful on hub — other hosts are skipped.
+- name: "§7 — skip on hosts that don't carry ipt_server/firezone/wg_pt"
+  ansible.builtin.meta: end_host
+  when: z2g_role != 'hub'
+
+- name: "§7.1 — read ipt_server ip rules"
+  community.docker.docker_container_exec:
+    container: ipt_server-garuda_ipt-1
+    argv: [ip, rule, show]
+  become: true
+  register: _ipt_rules
+  changed_when: false
+
+- name: "§7.1 — assert ipt_server RPDB routes fwmark {{ z2g_pbr_mark }} traffic to table {{ z2g_geo_table }}"
+  ansible.builtin.assert:
+    that: _ipt_rules.stdout is search('fwmark ' + z2g_pbr_mark + '.*lookup ' + (z2g_geo_table | string))
+    fail_msg: "ipt_server missing RPDB rule 'fwmark {{ z2g_pbr_mark }} lookup {{ z2g_geo_table }}'"
+
+- name: "§7.1 — read ipt_server geo table {{ z2g_geo_table }} routes"
+  community.docker.docker_container_exec:
+    container: ipt_server-garuda_ipt-1
+    argv: [ip, route, show, table, "{{ z2g_geo_table }}"]
+  become: true
+  register: _tbl200
+  changed_when: false
+
+- name: "§7.1 — assert geo table {{ z2g_geo_table }} is populated with dbip routes (>10000)"
+  ansible.builtin.assert:
+    that: _tbl200.stdout_lines | length > 10000
+    fail_msg: "table {{ z2g_geo_table }} has only {{ _tbl200.stdout_lines | length }} routes, expected >10000"
+
+- name: "§7.1 — read dns_dnat_ipt_server nft table"
+  community.docker.docker_container_exec:
+    container: ipt_server-garuda_ipt-1
+    argv: [nft, list, table, inet, dns_dnat_ipt_server]
+  become: true
+  register: _dns_dnat
+  changed_when: false
+
+- name: "§7.1 — assert dns_dnat_ipt_server nft table DNATs DNS and masquerades replies"
+  ansible.builtin.assert:
+    that:
+      - _dns_dnat.stdout is search('prerouting')
+      - _dns_dnat.stdout is search('dport 53')
+      - _dns_dnat.stdout is search('dnat')
+      - _dns_dnat.stdout is search('postrouting')
+      - _dns_dnat.stdout is search('masquerade')
+    fail_msg: "dns_dnat_ipt_server missing prerouting dnat or postrouting masquerade rules"
+
+- name: "§7.1 — read ipt_server_pbr nft table"
+  community.docker.docker_container_exec:
+    container: ipt_server-garuda_ipt-1
+    argv: [nft, list, table, ip, ipt_server_pbr]
+  become: true
+  register: _pbr
+  changed_when: false
+
+- name: "§7.1 — assert ipt_server_pbr nft table marks backbone traffic and uses conntrack timeouts"
+  ansible.builtin.assert:
+    that:
+      - _pbr.stdout is search('meta mark set')
+      - _pbr.stdout is search('ct ')
+    fail_msg: "ipt_server_pbr missing mark-set rule or conntrack stanzas"
+
+- name: "§7.2 — read wg-hub-ros FRR OSPF neighbor table (json)"
+  community.docker.docker_container_exec:
+    container: "ospf-{{ z2g_wg_hub_ros_container }}"
+    argv: [vtysh, -c, "show ip ospf neighbor json"]
+  become: true
+  register: _wg_hub_ros_nei
+  changed_when: false
+
+- ansible.builtin.set_fact:
+    ipt_nexthop_wg_hub_ros: >-
+      {{ ((_wg_hub_ros_nei.stdout | from_json)['neighbors'] | default({})).get(z2g_ipt_server_router_id, [{}])[0].get('ifaceAddress', '') }}
+
+- name: "§7.2 — assert ipt_server nexthop is discoverable from wg-hub-ros OSPF LSDB"
+  ansible.builtin.assert:
+    that: ipt_nexthop_wg_hub_ros | string | length > 0
+    fail_msg: "failed to discover ipt_server nexthop from wg-hub-ros OSPF LSDB"
+
+- name: "§7.2 — read wg-hub-ros ip rules"
+  community.docker.docker_container_exec:
+    container: "ospf-{{ z2g_wg_hub_ros_container }}"
+    argv: [ip, rule, show]
+  become: true
+  register: _wg_hub_ros_rules
+  changed_when: false
+
+- name: "§7.2 — assert wg-hub-ros sidecar routes tunnel ingress to transit table {{ z2g_transit_table }}"
+  ansible.builtin.assert:
+    that: _wg_hub_ros_rules.stdout is search('iif wg-hub-ros lookup ' + (z2g_transit_table | string))
+    fail_msg: "wg-hub-ros sidecar missing RPDB rule 'iif wg-hub-ros lookup {{ z2g_transit_table }}'"
+
+- name: "§7.2 — read wg-hub-ros transit table {{ z2g_transit_table }} routes"
+  community.docker.docker_container_exec:
+    container: "ospf-{{ z2g_wg_hub_ros_container }}"
+    argv: [ip, route, show, table, "{{ z2g_transit_table }}"]
+  become: true
+  register: _wg_hub_ros_201
+  changed_when: false
+
+- name: "§7.2 — assert wg_hub_ros transit table {{ z2g_transit_table }} has default via ipt_server nexthop"
+  ansible.builtin.assert:
+    that: _wg_hub_ros_201.stdout is search('default via ' + (ipt_nexthop_wg_hub_ros | regex_escape))
+    fail_msg: |
+      wg_hub_ros table {{ z2g_transit_table }} lacks 'default via {{ ipt_nexthop_wg_hub_ros }}'.
+      Output:
+      {{ _wg_hub_ros_201.stdout }}
+
+- name: "§7.2 — read firezone FRR OSPF neighbor table (json)"
+  community.docker.docker_container_exec:
+    container: ospf-firezone-firezone-1
+    argv: [vtysh, -c, "show ip ospf neighbor json"]
+  become: true
+  register: _fz_nei
+  changed_when: false
+
+- ansible.builtin.set_fact:
+    ipt_nexthop_firezone: >-
+      {{ ((_fz_nei.stdout | from_json)['neighbors'] | default({})).get(z2g_ipt_server_router_id, [{}])[0].get('ifaceAddress', '') }}
+
+- name: "§7.2 — assert ipt_server nexthop is discoverable from firezone OSPF LSDB"
+  ansible.builtin.assert:
+    that: ipt_nexthop_firezone | string | length > 0
+    fail_msg: "failed to discover ipt_server nexthop from firezone OSPF LSDB"
+
+- name: "§7.2 — read firezone ip rules"
+  community.docker.docker_container_exec:
+    container: ospf-firezone-firezone-1
+    argv: [ip, rule, show]
+  become: true
+  register: _fz_rules
+  changed_when: false
+
+- name: "§7.2 — assert firezone sidecar routes tunnel ingress to transit table {{ z2g_transit_table }}"
+  ansible.builtin.assert:
+    that: _fz_rules.stdout is search('iif wg-firezone lookup ' + (z2g_transit_table | string))
+    fail_msg: "firezone sidecar missing RPDB rule 'iif wg-firezone lookup {{ z2g_transit_table }}'"
+
+- name: "§7.2 — read firezone transit table {{ z2g_transit_table }} routes"
+  community.docker.docker_container_exec:
+    container: ospf-firezone-firezone-1
+    argv: [ip, route, show, table, "{{ z2g_transit_table }}"]
+  become: true
+  register: _fz_201
+  changed_when: false
+
+- name: "§7.2 — assert firezone transit table {{ z2g_transit_table }} has default via ipt_server nexthop"
+  ansible.builtin.assert:
+    that: _fz_201.stdout is search('default via ' + (ipt_nexthop_firezone | regex_escape))
+    fail_msg: |
+      firezone table {{ z2g_transit_table }} lacks 'default via {{ ipt_nexthop_firezone }}'.
+      Output:
+      {{ _fz_201.stdout }}
+
+- name: "§7.3 — read ipt_server OSPF external LSA database"
+  community.docker.docker_container_exec:
+    container: ospf-ipt_server-garuda_ipt-1
+    argv: [vtysh, -c, "show ip ospf database external"]
+  become: true
+  register: _lsa_ext
+  changed_when: false
+
+- name: "§7.3 — assert ipt_server advertises type-5 LSA 0.0.0.0/0 tag 201 as router-id {{ z2g_ipt_server_router_id }}"
+  ansible.builtin.assert:
+    that:
+      - "'0.0.0.0' in _lsa_ext.stdout"
+      - "'Tag: 201' in _lsa_ext.stdout or 'External Route Tag: 201' in _lsa_ext.stdout"
+      - "z2g_ipt_server_router_id in _lsa_ext.stdout"
+    fail_msg: "ipt_server not advertising type-5 LSA 0.0.0.0/0 tag 201 as router-id {{ z2g_ipt_server_router_id }}"
+
+- name: "§7.4 — read wg_pt ip rules"
+  community.docker.docker_container_exec:
+    container: "{{ z2g_wg_pt_container }}"
+    argv: [ip, rule, show]
+  become: true
+  register: _wg_pt_rules
+  changed_when: false
+
+- name: "§7.4 — assert wg_pt RPDB routes backbone ingress to via_tunnel table"
+  ansible.builtin.assert:
+    that: _wg_pt_rules.stdout is search('iif backbone lookup via_tunnel')
+    fail_msg: "wg_pt missing RPDB rule 'iif backbone lookup via_tunnel'"
+
+- name: "§7.4 — read wg_pt via_tunnel routing table"
+  community.docker.docker_container_exec:
+    container: "{{ z2g_wg_pt_container }}"
+    argv: [ip, route, show, table, via_tunnel]
+  become: true
+  register: _wg_pt_vt
+  changed_when: false
+
+- name: "§7.4 — assert wg_pt via_tunnel table has default via tunnel and backbone subnet"
+  ansible.builtin.assert:
+    that:
+      - _wg_pt_vt.stdout is search('default dev wg-pt')
+      - _wg_pt_vt.stdout is search(z2g_backbone_subnet | regex_escape + '.*dev backbone')
+    fail_msg: |
+      wg_pt table via_tunnel missing 'default dev wg-pt' or '{{ z2g_backbone_subnet }} dev backbone'.
+      Output:
+      {{ _wg_pt_vt.stdout }}
+
+- name: "§7.4 — read wg_pt default route"
+  community.docker.docker_container_exec:
+    container: "{{ z2g_wg_pt_container }}"
+    argv: [ip, route, show, default]
+  become: true
+  register: _wg_pt_default
+  changed_when: false
+
+- name: "§7.4 — assert wg_pt default route exits via border gateway ({{ z2g_border_subnet | ansible.utils.ipaddr('1') | ansible.utils.ipaddr('address') }})"
+  vars:
+    _border_gw: "{{ z2g_border_subnet | ansible.utils.ipaddr('1') | ansible.utils.ipaddr('address') }}"
+  ansible.builtin.assert:
+    that: _wg_pt_default.stdout is search('default via ' + (_border_gw | regex_escape))
+    fail_msg: "wg_pt default route must be via border ({{ _border_gw }}), got: {{ _wg_pt_default.stdout }}"
+
+- name: "§7.4 — read wg_pt border_wg-pt nft table"
+  community.docker.docker_container_exec:
+    container: "{{ z2g_wg_pt_container }}"
+    argv: [nft, list, table, inet, border_wg-pt]
+  become: true
+  register: _wg_pt_nft
+  changed_when: false
+
+- name: "§7.4 — assert border_wg-pt nft table masquerades private-subnet traffic on wg_pt egress"
+  ansible.builtin.assert:
+    that:
+      - _wg_pt_nft.stdout is search('oifname "wg-pt"')
+      - _wg_pt_nft.stdout is search('masquerade')
+      - _wg_pt_nft.stdout is search('10\\.0\\.0\\.0/8')
+      - _wg_pt_nft.stdout is search('172\\.16\\.0\\.0/12')
+    fail_msg: "border_wg-pt missing masquerade on oifname 'wg-pt' or private-subnet bypass rules"

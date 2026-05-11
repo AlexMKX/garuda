@@ -59,7 +59,7 @@ rendered by the `wireguard` role's `postup.sh`).
 If you use this role **outside the Garuda stack** — meaning there is no
 border bridge with masquerade, no `oifname "border"` SNAT chain on an
 adjacent wireguard container, and no upstream NAT gateway you control — you
-**MUST** set `fz_masquerade: true` (or supply it via `fz_config.fz_masquerade`).
+**MUST** set `fz_masquerade: true`.
 
 Without it, client traffic leaves the host with a non-routable source from
 your `fz_client_subnet` (default `10.11.0.0/24`) and is silently dropped by

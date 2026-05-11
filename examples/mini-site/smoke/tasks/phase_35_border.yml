@@ -1,0 +1,57 @@
+---
+# Phase 3.5: border network and border interface presence on all linux_hosts.
+- name: "§3.5 — inspect border_network docker network"
+  community.docker.docker_network_info:
+    name: border_network
+  become: true
+  register: _border_net
+
+- name: "§3.5 — assert border_network subnet is {{ z2g_border_subnet }}"
+  ansible.builtin.assert:
+    that: z2g_border_subnet in (_border_net.network.IPAM.Config | map(attribute='Subnet') | list)
+    fail_msg: "border_network must exist with subnet {{ z2g_border_subnet }} on {{ inventory_hostname }}"
+
+- name: "§3.5 — choose border container per host"
+  ansible.builtin.set_fact:
+    _border_container: >-
+      {{ z2g_wg_de_container if z2g_role == 'de' else z2g_wg_pt_container }}
+
+- name: "§3.5 — read border container interface addresses"
+  community.docker.docker_container_exec:
+    container: "{{ _border_container }}"
+    argv: [ip, -o, addr, show, border]
+  become: true
+  register: _wg_border
+  changed_when: false
+
+- name: "§3.5 — assert border interface has an address in {{ z2g_border_subnet }}"
+  ansible.builtin.assert:
+    that: >-
+      _wg_border.stdout_lines
+        | map('regex_findall', '\\binet (\\S+)')
+        | flatten
+        | map('ansible.utils.ipaddr', z2g_border_subnet)
+        | select
+        | list | length > 0
+    fail_msg: "border iface in {{ _border_container }} must have address in {{ z2g_border_subnet }}"
+
+- name: "§3.5 — read ipt_server border interface addresses (hub only)"
+  community.docker.docker_container_exec:
+    container: ipt_server-garuda_ipt-1
+    argv: [ip, -o, addr, show, border]
+  become: true
+  register: _ipt_border
+  changed_when: false
+  when: z2g_role == 'hub'
+
+- name: "§3.5 — assert ipt_server border interface has an address in {{ z2g_border_subnet }} (hub only)"
+  ansible.builtin.assert:
+    that: >-
+      _ipt_border.stdout_lines
+        | map('regex_findall', '\\binet (\\S+)')
+        | flatten
+        | map('ansible.utils.ipaddr', z2g_border_subnet)
+        | select
+        | list | length > 0
+    fail_msg: "border iface in ipt_server must have address in {{ z2g_border_subnet }}"
+  when: z2g_role == 'hub'

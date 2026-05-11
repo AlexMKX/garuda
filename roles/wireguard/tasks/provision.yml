@@ -3,8 +3,8 @@
 # Entry points: Invoked by modules/linux_apply dispatcher via tasks_from=provision.
 # Inputs: wireguard_tunnel_name (or wireguard_interface_name fallback),
 #         wireguard_interface_name, wireguard_address, wireguard_private_key,
-#         wireguard_table, wireguard_peer_public_key, wireguard_peer_allowed_ips,
-#         wireguard_mesh_root, wireguard_image, wireguard_ops_root.
+#         wireguard_table, wireguard_peer_public_key, wireguard_peer_address,
+#         wireguard_allowed_nets, wireguard_mesh_root, wireguard_image, wireguard_ops_root.
 # Outputs: wireguard_compose_file, wireguard_compose_project facts.
 # Side effects: Builds/delivers docker image, renders config, converges compose stack.
 
@@ -24,7 +24,7 @@
       - wireguard_private_key is defined
       - wireguard_table is defined
       - wireguard_peer_public_key is defined
-      - wireguard_peer_allowed_ips is defined
+      - wireguard_peer_address is defined
     quiet: true
     fail_msg: |
       Wireguard provision requires:
@@ -34,7 +34,7 @@
       - wireguard_private_key
       - wireguard_table
       - wireguard_peer_public_key
-      - wireguard_peer_allowed_ips
+      - wireguard_peer_address
 
 - name: Set host configuration
   ansible.builtin.set_fact:

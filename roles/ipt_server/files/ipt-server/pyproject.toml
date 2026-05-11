@@ -36,10 +36,16 @@ ignore-paths = ["^.*/tests/.*$"]
 
 [tool.pylint."messages control"]
 disable = [
+    # ipt-server is a high-churn operational daemon; docstrings on internal
+    # helpers add maintenance friction without proportional readability gain.
+    # Public API (Config, Router, route_health) is documented via type annotations.
     "missing-module-docstring",
     "missing-class-docstring",
     "missing-function-docstring",
+    # Data-holder classes (RouteEntry, DnsRecord, etc.) have no meaningful methods.
     "too-few-public-methods",
+    # f-string logging is intentional for readability in hot paths.
     "logging-fstring-interpolation",
+    # Exception handling follows fail-fast pattern with structured logging.
     "broad-exception-caught",
 ]

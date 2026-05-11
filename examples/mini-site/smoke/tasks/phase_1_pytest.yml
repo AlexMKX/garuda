@@ -1,0 +1,11 @@
+---
+# Checklist §1: run the stand pytest suite from the garuda-repo root.
+# z2g_stand_root resolves to the garuda-repo root (examples/mini-site/smoke/../../..).
+# The explicit "tests" arg prevents pytest from wandering into examples/.
+- name: "§1 — pytest -q (stand contracts)"
+  ansible.builtin.command:
+    cmd: pytest -q tests
+    chdir: "{{ z2g_stand_root }}"
+  register: _pytest
+  changed_when: false
+  failed_when: _pytest.rc != 0

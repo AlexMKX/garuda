@@ -1,0 +1,217 @@
+---
+# Z2G (Zero-to-Green) smoke playbook.
+# Mirrors dev/vpn2/checklist.md §1-§9.
+# Default run (safe): phase_1 + bootstrap + phase_3..9 against a live stand.
+# Full run with apply: add -e allow_apply=yes to enable phase_2.
+# Targeted run: --tags phase_N
+#
+# Entry command:
+#   ansible-playbook examples/mini-site/smoke/z2g.yml
+
+- name: "Phase 1 — pytest"
+  hosts: localhost
+  gather_facts: false
+  tags: [phase_1]
+  tasks:
+    - ansible.builtin.import_tasks: tasks/phase_1_pytest.yml
+
+- name: "Phase 2 — terraform apply (gated)"
+  hosts: localhost
+  gather_facts: false
+  tags: [phase_2, apply]
+  tasks:
+    - ansible.builtin.import_tasks: tasks/phase_2_apply.yml
+
+- name: "Phase 0 — bootstrap inventory from terraform output"
+  hosts: localhost
+  gather_facts: false
+  tags: [always]
+  tasks:
+    - name: "Bootstrap — fetch inventory from terraform outputs"
+      block:
+        - name: "Fetch ansible_smoke_inventory from terraform"
+          ansible.builtin.command:
+            cmd: "{{ tf_cli | default('tofu') }} output -json ansible_smoke_inventory"
+            chdir: "{{ z2g_terraform_dir }}"
+          register: _tf_servers
+          changed_when: false
+
+        - name: "Fetch ansible_client_inventory from terraform"
+          ansible.builtin.command:
+            cmd: "{{ tf_cli | default('tofu') }} output -json ansible_client_inventory"
+            chdir: "{{ z2g_terraform_dir }}"
+          register: _tf_clients
+          changed_when: false
+      rescue:
+        - ansible.builtin.fail:
+            msg: >-
+              Terraform outputs not available. Ensure terraform state exists:
+              run 'terraform init && terraform apply' first,
+              or re-run with -e allow_apply=yes to apply as part of Z2G.
+
+    # ansible-core 2.19 silently drops the magic
+    # `ansible_ssh_private_key_file` host_var when set via add_host (the
+    # value is reset to ~/.ssh/id_ed25519 by the time the next play
+    # opens the connection). add_host's other host_vars survive.
+    # Workaround: write a minimal static inventory file with only the
+    # connection-related vars, then reload it via meta:refresh_inventory.
+    - name: "Materialize a static inventory file with magic ssh vars"
+      vars:
+        _servers: "{{ _tf_servers.stdout | from_json }}"
+        _clients: "{{ _tf_clients.stdout | from_json }}"
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/_z2g_runtime_inventory.yml"
+        mode: "0600"
+        content: |
+          all:
+            children:
+              linux_hosts:
+                hosts:
+          {% for entry in _servers | dict2items %}
+          {% if 'linux_hosts' in (entry.value.groups | default([])) %}
+                  {{ entry.value.inventory_name }}:
+                    ansible_host: "{{ entry.value.ansible_host }}"
+                    ansible_user: "{{ entry.value.ansible_user }}"
+                    ansible_connection: "{{ entry.value.ansible_connection }}"
+                    ansible_ssh_private_key_file: "{{ entry.value.ansible_ssh_private_key_file }}"
+                    z2g_role: {{ entry.key }}
+          {% endif %}
+          {% endfor %}
+              routeros:
+                vars:
+                  # RouterOS network_cli auth shared across all routeros hosts.
+                  ansible_become: false
+                  ansible_ssh_private_key_file: ~/.ssh/id_ed25519
+                  ansible_persistent_connect_timeout: 30
+                  ansible_persistent_command_timeout: 30
+                hosts:
+          {% for entry in _servers | dict2items %}
+          {% if 'routeros' in (entry.value.groups | default([])) %}
+                  {{ entry.value.inventory_name }}:
+                    ansible_host: "{{ entry.value.ansible_host }}"
+                    ansible_user: "{{ entry.value.ansible_user }}"
+                    ansible_connection: "{{ entry.value.ansible_connection }}"
+                    ansible_network_os: "{{ entry.value.ansible_network_os }}"
+                    ansible_password: "{{ entry.value.ansible_password }}"
+                    z2g_role: {{ entry.key }}
+          {% endif %}
+          {% endfor %}
+              firezone_clients:
+                hosts:
+          {% for entry in _clients | dict2items %}
+                  {{ entry.value.inventory_name }}:
+                    ansible_host: "{{ entry.value.ansible_host }}"
+                    ansible_user: "{{ entry.value.ansible_user }}"
+                    ansible_connection: "{{ entry.value.ansible_connection }}"
+                    ansible_ssh_private_key_file: ~/.ssh/id_ed25519
+                    z2g_role: {{ entry.key }}
+          {% endfor %}
+
+    - name: "Reload inventory from the freshly written file"
+      ansible.builtin.meta: refresh_inventory
+
+    # firezone clients now ship in the runtime inventory file written
+    # above (see "Materialize a static inventory file..."). No add_host
+    # call needed.
+
+    - name: "Set egress / stand IPs and inventory names as facts for downstream phases"
+      vars:
+        # ansible_smoke_inventory is a dict keyed by role (hub, pt, de, routeros)
+        # — same source the in-memory inventory above is built from.  We reuse it
+        # for the public IP facts so phase_8 / phase_8b / phase_10 stop relying on
+        # static z2g_*_public_ip group_vars or on per-IP raw terraform outputs
+        # (which were dropped from the garuda unit when smoke inventory was
+        # consolidated into one output).
+        _smoke_inv: "{{ _tf_servers.stdout | from_json }}"
+      ansible.builtin.set_fact:
+        pt_public_ip: "{{ _smoke_inv['pt'].ansible_host }}"
+        de_public_ip: "{{ _smoke_inv['de'].ansible_host }}"
+        hub_public_ip: "{{ _smoke_inv['hub'].ansible_host }}"
+        pt_inventory_host: "{{ _smoke_inv['pt'].inventory_name }}"
+        de_inventory_host: "{{ _smoke_inv['de'].inventory_name }}"
+        hub_inventory_host: "{{ _smoke_inv['hub'].inventory_name }}"
+
+- name: "Phase 0b — ensure python3-docker is available for community.docker modules"
+  hosts: linux_hosts
+  gather_facts: false
+  tags: [always]
+  tasks:
+    - name: "Bootstrap — install python3-docker on linux_hosts"
+      ansible.builtin.package:
+        name: python3-docker
+        state: present
+      become: true
+
+- name: "Phase 3 — container health"
+  hosts: linux_hosts
+  gather_facts: false
+  tags: [phase_3]
+  tasks:
+    - ansible.builtin.import_tasks: tasks/phase_3_containers.yml
+
+- name: "Phase 3.5 — border network"
+  hosts: linux_hosts
+  gather_facts: false
+  tags: [phase_3, border]
+  tasks:
+    - ansible.builtin.import_tasks: tasks/phase_35_border.yml
+
+- name: "Phase 3.5b — host sysctl defaults"
+  hosts: linux_hosts
+  gather_facts: false
+  tags: [phase_3, sysctl]
+  tasks:
+    - ansible.builtin.import_tasks: tasks/phase_35b_host_sysctl_defaults.yml
+
+- name: "Phase 4 — WireGuard tunnels"
+  hosts: linux_hosts
+  gather_facts: false
+  tags: [phase_4, wg]
+  tasks:
+    - ansible.builtin.import_tasks: tasks/phase_4_wireguard.yml
+
+- name: "Phase 5 — OSPF adjacency (linux)"
+  hosts: linux_hosts
+  gather_facts: false
+  tags: [phase_5, ospf]
+  tasks:
+    - ansible.builtin.import_tasks: tasks/phase_5_ospf_adj.yml
+
+- name: "Phase 5+6 — OSPF on RouterOS"
+  hosts: routeros
+  gather_facts: false
+  tags: [phase_5, phase_6, ospf]
+  tasks:
+    - ansible.builtin.import_tasks: tasks/phase_6_ospf_routes.yml
+
+- name: "Phase 7 — geo routing and PBR transit"
+  hosts: linux_hosts
+  gather_facts: false
+  tags: [phase_7, pbr]
+  tasks:
+    - ansible.builtin.import_tasks: tasks/phase_7_geo_routing.yml
+
+- name: "Phase 8 — Firezone client connectivity"
+  hosts: firezone_clients
+  gather_facts: false
+  tags: [phase_8, client]
+  tasks:
+    - ansible.builtin.import_tasks: tasks/phase_8_firezone_client.yml
+
+- name: "Phase 8b — asymmetric routing"
+  hosts: linux_hosts
+  gather_facts: false
+  tags: [phase_8, async]
+  tasks:
+    - ansible.builtin.import_tasks: tasks/phase_8b_asymmetric_routing.yml
+
+- name: "Phase 9 — idempotency"
+  hosts: localhost
+  gather_facts: false
+  tags: [phase_9, idempotency]
+  tasks:
+    - ansible.builtin.import_tasks: tasks/phase_9_idempotency.yml
+
+- import_playbook: tasks/phase_10_egress_failover.yml
+
+- import_playbook: tasks/phase_11_pinning.yml

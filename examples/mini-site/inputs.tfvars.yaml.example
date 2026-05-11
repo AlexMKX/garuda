@@ -1,43 +1,112 @@
 # Sanitized variable template for the mini-site reference example.
-# Copy this file, rename it to inputs.tfvars.yaml (or your SOPS-encrypted
-# equivalent), and replace every placeholder value before running terragrunt.
+# This file is for Terragrunt/operator use. Copy it to inputs.tfvars.yaml
+# in your private wrapper and replace all placeholder values.
+# Direct Terraform/OpenTofu users: see infra/terraform.tfvars.example and
+# garuda/terraform.tfvars.example instead.
 #
 # All domain names use example.net.
 # All IP addresses use RFC 5737 documentation ranges:
 #   192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24
 
-base_domain: example.net
 env_slug: mini-site
+base_domain: example.net
+hub_fqdn_prefix: hub
 
 hub:
-  fqdn_prefix: hub
-  machine_type: example-small
+  cores: 2
+  memory_gb: 4
+  boot_disk_gb: 20
+  data_disk_gb: 20
+  existing_disk_id: null
 
 edges:
-  usa:
-    fqdn_prefix: usa
-    hub_cidr: 192.0.2.1/28
-    peer_cidr: 192.0.2.2/28
+  pt:
+    machine_type: e2-small
+    boot_disk_gb: 20
+    region: us-central1
+    zone: us-central1-a
+    fqdn_prefix: pt
+    hub_cidr: 192.0.2.129/28
+    peer_cidr: 192.0.2.130/28
     listen_port: 51820
-    ospf_router_id_hub: 192.0.2.10
-    ospf_router_id_peer: 192.0.2.11
+    ospf_router_id_hub: 198.51.100.20
+    ospf_router_id_peer: 198.51.100.23
+  de:
+    machine_type: e2-small
+    boot_disk_gb: 20
+    region: europe-west3
+    zone: europe-west3-a
+    fqdn_prefix: de
+    hub_cidr: 192.0.2.145/28
+    peer_cidr: 192.0.2.146/28
+    listen_port: 51821
+    ospf_router_id_hub: 198.51.100.30
+    ospf_router_id_peer: 198.51.100.33
 
 hub_ros:
-  hub_cidr: 198.51.100.1/28
-  routeros_cidr: 198.51.100.2/28
-  listen_port: 51821
-  ospf_router_id_hub: 198.51.100.10
-  ospf_router_id_peer: 198.51.100.11
+  hub_cidr: 192.0.2.161/28
+  routeros_cidr: 192.0.2.162/28
+  listen_port: 51822
+  ospf_router_id_hub: 198.51.100.21
 
 routeros:
   hostname: routeros-example
-  management_host: 203.0.113.10
+  management_host: 203.0.113.1
   user: admin
   uplink_interface: ether1
+
+routeros_lan_gateway: "203.0.113.1"
+
+backbone_subnet: 192.0.2.0/26
+border_subnet: 192.0.2.64/26
+firezone_client_subnet: 198.51.100.128/25
+
+ospf_router_ids:
+  firezone: 198.51.100.22
+  ipt_server: 198.51.100.99
 
 operator_ssh_keys:
   - "operator:ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample operator@example"
 
-# Additional routes for ipt_server. Each entry is a list(string) with type
-# inference: CIDR -> net rule, ISO country code -> geo rule, regex -> domain rule.
+# Sensitive values — supply via SOPS-encrypted secrets.sops.yaml in your wrapper.
+routeros_password: "REPLACE_WITH_SOPS_SECRET"
+firezone_admin_password: "REPLACE_WITH_SOPS_SECRET"
+firezone_oidc_google_client_id: "my-oidc-client-id.apps.googleusercontent.com"
+firezone_oidc_google_client_secret: "REPLACE_WITH_SOPS_SECRET"
+
+smoke_client_firezone:
+  inventory_name: fz-client-example
+  management_host: 203.0.113.200
+  user: operator
+
+# Additional routes for ipt_server (type-inferred: CIDR, ISO country, regex).
 ipt_routes_germany_nets: []
+
+# Yandex Cloud substrate (used by infra root).
+yc:
+  cloud_id: my-yc-cloud-id
+  folder_id: my-yc-folder-id
+  zone: ru-central1-a
+  network_id: my-yc-network-id
+  primary_subnet_id: my-yc-subnet-id
+
+# Sensitive YC service account key JSON — use SOPS.
+yc_service_account_key_json: "REPLACE_WITH_SOPS_SECRET"
+
+# GCP substrate (used by infra root).
+gcp:
+  project_id: my-gcp-project
+
+# Sensitive GCP service account credentials JSON — use SOPS.
+gcp_credentials_json: "REPLACE_WITH_SOPS_SECRET"
+
+# Cloudflare zone (used by infra root).
+cloudflare:
+  zone_name: example.net
+
+# Sensitive Cloudflare API token — use SOPS.
+cloudflare_api_token: "REPLACE_WITH_SOPS_SECRET"
+
+# Absolute path to the garuda-repo clone on the operator machine.
+# The Terragrunt wrapper uses this to source the public example roots.
+garuda_repo_path: /path/to/garuda-repo

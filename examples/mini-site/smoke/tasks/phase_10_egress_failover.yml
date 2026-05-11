@@ -1,0 +1,217 @@
+# Phase 10 — egress failover
+#
+# Verifies ordered gw-member failover in ipt_routes works end-to-end:
+#   1) baseline curl from firezone client egresses via de edge (primary, lex-first)
+#   2) stop wg-de on de edge; wait for OSPF dead + monitor tick
+#   3) curl egresses via pt edge (fallback)
+#   4) restart wg-de; wait for OSPF convergence
+#   5) curl egresses via de edge again
+#
+# `pt_public_ip` / `de_public_ip` are set as facts on localhost by Phase 0
+# of z2g.yml (sourced from `ansible_smoke_inventory`), so this phase reads
+# them directly from the localhost host vars instead of re-running terragrunt.
+#
+# Inventory variable expected: de_inventory_host, hub_inventory_host (set in
+# z2g Phase 0 from `ansible_smoke_inventory.*.inventory_name`).
+#
+# NOTE on egress pinning:
+#   ipt_server implements egress pinning: after the first egress through de,
+#   the client IP is added to the `pinned_de` nft set, which routes subsequent
+#   traffic via table 300 (blackhole) when de is down — intentionally preventing
+#   failover for pinned clients.  The failover test must therefore flush the
+#   pinned_de / pinned_pt sets before each egress-during-failover check so that
+#   the NHG ordered-failover logic (table 200 default nhid) is exercised.
+---
+- name: Phase 10 — egress failover via ordered gw-member selection
+  hosts: localhost
+  gather_facts: false
+  tags: [phase_10, failover]
+  vars:
+    curl_retries: 10
+    curl_delay: 10
+    ipt_server_container: ipt_server-garuda_ipt-1
+    # The wg-de compose project lives under wireguard_mesh_root, which
+    # defaults to /opt/garuda/wg_tunnels (see roles/wireguard/meta/
+    # argument_specs.yml). The tunnel directory name matches the compose
+    # project name, which is "<env_slug>-wg-de" — same prefix the smoke
+    # playbook uses for container resolution. Override
+    # z2g_wg_de_compose_path in env-specific group_vars (e.g. when
+    # wireguard_mesh_root is non-default) to point this elsewhere.
+    _wg_de_compose_path: >-
+      {{ z2g_wg_de_compose_path
+         | default('/opt/garuda/wg_tunnels/' ~ z2g_compose_project_prefix ~ 'wg-de') }}
+  tasks:
+    # ------------------------------------------------------------------ #
+    # Pre-flight: clear any stale egress pinning for the test client so   #
+    # the NHG ordered-failover path (not the pinning blackhole) is tested.#
+    # ------------------------------------------------------------------ #
+    - name: "Pre-flight: flush egress pinning sets in ipt_server"
+      delegate_to: "{{ hub_inventory_host }}"
+      become: true
+      community.docker.docker_container_exec:
+        container: "{{ ipt_server_container }}"
+        argv:
+          - nft
+          - flush
+          - set
+          - ip
+          - pinning
+          - pinned_de
+      ignore_errors: true
+
+    - name: "Pre-flight: flush pinned_pt set in ipt_server"
+      delegate_to: "{{ hub_inventory_host }}"
+      become: true
+      community.docker.docker_container_exec:
+        container: "{{ ipt_server_container }}"
+        argv:
+          - nft
+          - flush
+          - set
+          - ip
+          - pinning
+          - pinned_pt
+      ignore_errors: true
+
+    - name: Baseline — egress IP through firezone client wg-client container
+      delegate_to: "{{ groups['firezone_clients'] | first }}"
+      become: true
+      community.docker.docker_container_exec:
+        container: wg-client
+        argv: [wget, -qO-, --timeout=10, "http://icanhazip.com"]
+      register: baseline_egress_raw
+      retries: "{{ curl_retries }}"
+      delay: "{{ curl_delay }}"
+      until: baseline_egress_raw.rc == 0
+
+    - name: Set baseline egress fact
+      ansible.builtin.set_fact:
+        baseline_egress_ip: "{{ baseline_egress_raw.stdout | trim }}"
+
+    - name: Assert baseline egress == de public IP (de is primary, lexicographically first)
+      ansible.builtin.assert:
+        that:
+          - baseline_egress_ip == de_public_ip
+        fail_msg: >-
+          baseline egress {{ baseline_egress_ip }} does not match
+          de {{ de_public_ip }} — check ipt_routes primary gw
+
+    # block/rescue ensures wg-de is always restored even if failover check fails
+    - name: Failover test block
+      block:
+        - name: Stop wg-de on de edge (simulate primary transit failure)
+          delegate_to: "{{ de_inventory_host }}"
+          become: true
+          community.docker.docker_compose_v2:
+            project_src: "{{ _wg_de_compose_path }}"
+            state: absent
+
+        - name: Wait for OSPF dead interval + ipt_routes monitor tick to converge
+          ansible.builtin.pause:
+            seconds: 60
+
+        # Flush pinning so the NHG failover path (not the blackhole) is tested.
+        # The baseline wget above pins the client to de; clear it before the
+        # failover check so traffic goes through the ordered NHG fallback (pt).
+        - name: "Failover pre-check: flush egress pinning sets"
+          delegate_to: "{{ hub_inventory_host }}"
+          become: true
+          community.docker.docker_container_exec:
+            container: "{{ ipt_server_container }}"
+            argv: [nft, flush, set, ip, pinning, pinned_de]
+          ignore_errors: true
+
+        - name: "Failover pre-check: flush pinned_pt"
+          delegate_to: "{{ hub_inventory_host }}"
+          become: true
+          community.docker.docker_container_exec:
+            container: "{{ ipt_server_container }}"
+            argv: [nft, flush, set, ip, pinning, pinned_pt]
+          ignore_errors: true
+
+        - name: Egress check during failover
+          delegate_to: "{{ groups['firezone_clients'] | first }}"
+          become: true
+          community.docker.docker_container_exec:
+            container: wg-client
+            argv: [wget, -qO-, --timeout=10, "http://icanhazip.com"]
+          register: failover_egress_raw
+          retries: "{{ curl_retries }}"
+          delay: "{{ curl_delay }}"
+          until: failover_egress_raw.rc == 0
+
+        - name: Set failover egress fact
+          ansible.builtin.set_fact:
+            failover_egress_ip: "{{ failover_egress_raw.stdout | trim }}"
+
+        - name: Assert egress switched to pt edge (fallback)
+          ansible.builtin.assert:
+            that:
+              - failover_egress_ip == pt_public_ip
+              - failover_egress_ip != baseline_egress_ip
+            fail_msg: >-
+              failover did not happen — got {{ failover_egress_ip }},
+              expected {{ pt_public_ip }} (pt edge, fallback)
+
+      rescue:
+        - name: Failover test failed — record failure for later assertion
+          ansible.builtin.set_fact:
+            failover_test_failed: true
+
+      always:
+        - name: Restart wg-de on de edge (always, even on failure)
+          delegate_to: "{{ de_inventory_host }}"
+          become: true
+          community.docker.docker_compose_v2:
+            project_src: "{{ _wg_de_compose_path }}"
+            state: present
+
+        - name: Wait for OSPF re-convergence + monitor tick
+          ansible.builtin.pause:
+            seconds: 90
+
+        # After wg-de restart, flush pinning again so the recovery check
+        # goes through de (not pinned to pt from the failover wget).
+        - name: "Recovery pre-check: flush egress pinning sets"
+          delegate_to: "{{ hub_inventory_host }}"
+          become: true
+          community.docker.docker_container_exec:
+            container: "{{ ipt_server_container }}"
+            argv: [nft, flush, set, ip, pinning, pinned_de]
+          ignore_errors: true
+
+        - name: "Recovery pre-check: flush pinned_pt"
+          delegate_to: "{{ hub_inventory_host }}"
+          become: true
+          community.docker.docker_container_exec:
+            container: "{{ ipt_server_container }}"
+            argv: [nft, flush, set, ip, pinning, pinned_pt]
+          ignore_errors: true
+
+        - name: Egress check after recovery
+          delegate_to: "{{ groups['firezone_clients'] | first }}"
+          become: true
+          community.docker.docker_container_exec:
+            container: wg-client
+            argv: [wget, -qO-, --timeout=10, "http://icanhazip.com"]
+          register: restored_egress_raw
+          retries: "{{ curl_retries }}"
+          delay: "{{ curl_delay }}"
+          until: restored_egress_raw.rc == 0
+
+        - name: Set restored egress fact
+          ansible.builtin.set_fact:
+            restored_egress_ip: "{{ restored_egress_raw.stdout | trim }}"
+
+        - name: Assert egress restored to de edge (primary)
+          ansible.builtin.assert:
+            that:
+              - restored_egress_ip == de_public_ip
+            fail_msg: >-
+              recovery did not happen — got {{ restored_egress_ip }},
+              expected {{ de_public_ip }} (de edge, primary)
+
+    - name: Fail if failover test failed
+      ansible.builtin.fail:
+        msg: "Failover test failed — see earlier output for details"
+      when: failover_test_failed | default(false)

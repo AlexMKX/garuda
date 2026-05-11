@@ -2,6 +2,17 @@
 # Purpose: Provision the ipt_server stack (compose-managed geo-router + PowerDNS).
 # Entry points: Invoked by modules/linux_apply dispatcher via tasks_from=provision.
 
+- name: Validate ipt_pinning_egress entries
+  ansible.builtin.assert:
+    that:
+      - (item.value.gw is defined) != (item.value.dev is defined)
+    fail_msg: >-
+      ipt_pinning_egress.{{ item.key }} must set exactly one of gw or dev,
+      not both and not neither.
+  loop: "{{ (ipt_pinning_egress | default({})) | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
 - name: Ensure ipt_server directory exists
   ansible.builtin.file:
     path: "{{ ipt_server_dir }}"

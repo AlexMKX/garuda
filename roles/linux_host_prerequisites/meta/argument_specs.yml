@@ -4,7 +4,7 @@ argument_specs:
     short_description: Configure swap file and Docker daemon prerequisites.
     options:
       docker_daemon_config:
-        type: dict
+        type: raw
         required: false
         default: {}
         description: Content rendered into /etc/docker/daemon.json.

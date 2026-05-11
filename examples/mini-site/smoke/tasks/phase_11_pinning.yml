@@ -1,0 +1,197 @@
+# Phase 11 — egress pinning API smoke
+#
+# Verifies the pinning subsystem end-to-end:
+#   1) GET /api/egresses returns expected catalog keys
+#   2) Pin the test client to the first available egress via /api/pin/set
+#   3) Assert static fwmark→table rules are present (priority 100)
+#   4) Assert client saddr appears in the per-egress nft set
+#   5) Clear the pin via /api/pin/clear
+#   6) Assert client saddr removed from the per-egress nft set
+#
+# Inventory variables expected (group_vars/all.yml):
+#   ipt_server_backbone_ip    — backbone IP of the ipt_server container
+#   ipt_server_host           — inventory name of the ipt_server Linux host
+#   pinning_test_client_host  — inventory name of a transit-attached client (wg-client host)
+#   pinning_test_client_saddr — backbone IP the client presents to ipt_server
+#   pinning_wg_client_container — docker container name on pinning_test_client_host
+---
+- name: Phase 11 — egress pinning end-to-end
+  hosts: localhost
+  gather_facts: false
+  tags: [phase_11, pinning]
+  vars_files:
+    - ../group_vars/all.yml
+  tasks:
+    # Catalog request: use docker exec on wg-client so the request originates
+    # from the backbone-attached container, not the GCP host OS.
+    # Resolve the real source IP that wg-client presents to ipt_server.
+    # With border-only masquerade and firezone WIREGUARD_IPV*_MASQUERADE=false,
+    # the client's tunnel IP is preserved end-to-end; the portal sees the actual
+    # wg-firezone client IP, not a backbone-side proxy IP.
+    # The wg-client container's wg0 carries a single /32 firezone-assigned IP.
+    - name: "Resolve actual wg-client tunnel source IP (firezone-assigned, dynamic)"
+      community.docker.docker_container_exec:
+        container: "{{ pinning_wg_client_container }}"
+        argv: [sh, -c, "ip -4 -o addr show dev wg0 | awk '{print $4}' | cut -d/ -f1"]
+      delegate_to: "{{ pinning_test_client_host }}"
+      become: true
+      register: _wg_client_saddr_raw
+      changed_when: false
+
+    - name: "Pin client saddr fact for downstream assertions"
+      ansible.builtin.set_fact:
+        pinning_test_client_saddr: "{{ _wg_client_saddr_raw.stdout | trim }}"
+
+    - name: "Pinning catalog: GET /api/egresses from wg-client container"
+      community.docker.docker_container_exec:
+        container: "{{ pinning_wg_client_container }}"
+        argv:
+          - curl
+          - -sf
+          - "--max-time"
+          - "10"
+          - "http://{{ ipt_server_backbone_ip }}/api/egresses"
+      delegate_to: "{{ pinning_test_client_host }}"
+      become: true
+      register: catalog_raw
+
+    - name: "Parse catalog JSON"
+      ansible.builtin.set_fact:
+        pinning_catalog_egresses: "{{ (catalog_raw.stdout | from_json).egresses }}"
+
+    - name: "Assert catalog is non-empty"
+      ansible.builtin.assert:
+        that:
+          - pinning_catalog_egresses | length > 0
+        fail_msg: >-
+          /api/egresses returned empty catalog — pinning_egress may not be
+          configured on this stand
+
+    - name: "Pin client to first available egress"
+      vars:
+        first_egress: "{{ pinning_catalog_egresses | first }}"
+      community.docker.docker_container_exec:
+        container: "{{ pinning_wg_client_container }}"
+        argv:
+          - curl
+          - -sf
+          - "--max-time"
+          - "10"
+          - "http://{{ ipt_server_backbone_ip }}/api/pin/set?egress={{ first_egress }}"
+      delegate_to: "{{ pinning_test_client_host }}"
+      become: true
+      register: pin_set_raw
+
+    - name: "Assert set pin returned egress name"
+      ansible.builtin.assert:
+        that:
+          - (pin_set_raw.stdout | from_json).egress == pinning_catalog_egresses | first
+
+    - name: "Verify static fwmark→table rule for chosen egress is present"
+      ansible.builtin.command:
+        argv: [docker, exec, ipt_server-garuda_ipt-1, ip, rule, show, priority, "100"]
+      register: ip_rule_out
+      changed_when: false
+      delegate_to: "{{ ipt_server_host }}"
+      become: true
+
+    - name: "Assert at least one fwmark→pin-table rule is installed"
+      ansible.builtin.assert:
+        that:
+          - ip_rule_out.stdout is search('fwmark 0xa0[0-9a-f] lookup 30[0-9]')
+        fail_msg: |
+          static fwmark→table rules absent from priority 100.
+          Output: {{ ip_rule_out.stdout }}
+
+    - name: "Verify client saddr is in the per-egress nft set after set"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - ipt_server-garuda_ipt-1
+          - nft
+          - list
+          - set
+          - ip
+          - pinning
+          - "pinned_{{ pinning_catalog_egresses | first | replace('-', '_') }}"
+      register: nft_set_out
+      changed_when: false
+      delegate_to: "{{ ipt_server_host }}"
+      become: true
+
+    - name: "Assert client saddr is in the per-egress set"
+      ansible.builtin.assert:
+        that: pinning_test_client_saddr in nft_set_out.stdout
+        fail_msg: |
+          pinning saddr {{ pinning_test_client_saddr }} not in nft set
+          pinned_{{ pinning_catalog_egresses | first | replace('-', '_') }}.
+          Output: {{ nft_set_out.stdout }}
+
+    # Portal anchor smoke: verify the nft REDIRECT rule intercepts
+    # traffic destined for the anchor address and delivers it to the
+    # local pinning API listener.  The wg-client container routes
+    # 1.1.1.1 via the full-tunnel WireGuard interface, so the packet
+    # enters the ipt_server backbone chain and hits the REDIRECT.
+    - name: "Portal anchor: GET http://1.1.1.1:1111/api/egresses via wg-client"
+      community.docker.docker_container_exec:
+        container: "{{ pinning_wg_client_container }}"
+        argv:
+          - curl
+          - -sf
+          - "--max-time"
+          - "10"
+          - "http://1.1.1.1:1111/api/egresses"
+      delegate_to: "{{ pinning_test_client_host }}"
+      become: true
+      register: portal_catalog_raw
+
+    - name: "Parse portal anchor catalog JSON"
+      ansible.builtin.set_fact:
+        portal_catalog_egresses: "{{ (portal_catalog_raw.stdout | from_json).egresses }}"
+
+    - name: "Assert portal anchor returns the same catalog as the direct API"
+      ansible.builtin.assert:
+        that:
+          - portal_catalog_egresses | length > 0
+          - portal_catalog_egresses | sort == pinning_catalog_egresses | sort
+        fail_msg: |
+          Portal anchor at 1.1.1.1:1111 returned unexpected catalog.
+          Via anchor:  {{ portal_catalog_egresses }}
+          Via direct:  {{ pinning_catalog_egresses }}
+
+    - name: "Clear pin via /api/pin/clear from wg-client container"
+      community.docker.docker_container_exec:
+        container: "{{ pinning_wg_client_container }}"
+        argv:
+          - curl
+          - -sf
+          - "--max-time"
+          - "10"
+          - "http://{{ ipt_server_backbone_ip }}/api/pin/clear"
+      delegate_to: "{{ pinning_test_client_host }}"
+      become: true
+
+    - name: "Verify client saddr was removed from the per-egress nft set after clear"
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - ipt_server-garuda_ipt-1
+          - nft
+          - list
+          - set
+          - ip
+          - pinning
+          - "pinned_{{ pinning_catalog_egresses | first | replace('-', '_') }}"
+      register: nft_set_after
+      changed_when: false
+      delegate_to: "{{ ipt_server_host }}"
+      become: true
+
+    - name: "Assert client saddr no longer in nft set"
+      ansible.builtin.assert:
+        that: pinning_test_client_saddr not in nft_set_after.stdout
+        fail_msg: |
+          pinning saddr {{ pinning_test_client_saddr }} still in nft set after clear.
+          Output: {{ nft_set_after.stdout }}

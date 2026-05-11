@@ -1,0 +1,102 @@
+---
+# Phase 8: end-to-end connectivity from Firezone WG client.
+# Runs on firezone_clients group (single host, fz-client-*).
+# The client MUST have a compose-managed wg-client up before this phase runs.
+- name: "§8.1 — assert WG client can reach RouterOS LAN gateway ({{ z2g_routeros_lan_gw }})"
+  community.docker.docker_container_exec:
+    container: wg-client
+    argv: [ping, -c, "3", -W, "2", "{{ z2g_routeros_lan_gw }}"]
+  become: true
+  register: _ping_lan
+  changed_when: false
+  failed_when: _ping_lan.rc != 0
+
+- name: "§8.2 — assert WG client can reach non-RU internet (1.1.1.1)"
+  community.docker.docker_container_exec:
+    container: wg-client
+    argv: [ping, -c, "3", -W, "2", 1.1.1.1]
+  become: true
+  register: _ping_cf
+  changed_when: false
+  failed_when: _ping_cf.rc != 0
+
+- name: "§8.2 — read ipt_server geo table {{ z2g_geo_table }} routes"
+  community.docker.docker_container_exec:
+    container: ipt_server-garuda_ipt-1
+    argv: [ip, route, show, table, "{{ z2g_geo_table }}"]
+  become: true
+  delegate_to: "{{ groups['linux_hosts'] | select('match', '^hub') | first }}"
+  register: _routes_geo
+  changed_when: false
+
+# Docker assigns backbone_network IPs in container-start order, so the actual
+# wg_de backbone IP is not fixed. Resolve it at runtime instead of hard-coding.
+# wg_de is the primary non-RU egress (lexicographically first edge key: de < pt).
+- name: "§8.2 — resolve wg_de container backbone IP"
+  ansible.builtin.command:
+    argv:
+      - docker
+      - inspect
+      - "{{ z2g_wg_de_container }}"
+      - --format
+      - "{{ '{{' }}.NetworkSettings.Networks.backbone_network.IPAddress{{ '}}' }}"
+  become: true
+  delegate_to: "{{ groups['linux_hosts'] | select('match', '^hub') | first }}"
+  register: _wg_de_backbone_ip
+  changed_when: false
+
+- name: "§8.2 — assert default in geo table exits via wg_de (non-RU geo path, de is primary)"
+  vars:
+    _wg_de_ip: "{{ _wg_de_backbone_ip.stdout | trim }}"
+  ansible.builtin.assert:
+    that:
+      - _wg_de_ip | length > 0
+      - _routes_geo.stdout is search('default.*via ' ~ (_wg_de_ip | regex_escape) ~ '.*backbone')
+    fail_msg: >-
+      Geo table {{ z2g_geo_table }} default must exit via wg_de backbone
+      (wg_de container IP on backbone_network = {{ _wg_de_ip }});
+      non-RU traffic uses the default route, not an explicit per-IP entry.
+      Got: {{ _routes_geo.stdout | truncate(200) }}
+
+- name: "§8.3 — assert WG client can reach RU internet (2ip.ru)"
+  community.docker.docker_container_exec:
+    container: wg-client
+    argv: [ping, -c, "3", -W, "3", 2ip.ru]
+  become: true
+  register: _ping_ru
+  changed_when: false
+  failed_when: _ping_ru.rc != 0
+
+- name: "§8.3 — read pdns logs (last 500 lines)"
+  # community.docker has no docker_container_logs module; logs are managed by
+  # the Docker daemon and not accessible from within the container.
+  ansible.builtin.command:
+    cmd: docker logs --tail 500 ipt_server-garuda_pdns-1
+  become: true
+  delegate_to: "{{ groups['linux_hosts'] | select('match', '^hub') | first }}"
+  register: _pdns_log
+  changed_when: false
+
+- name: "§8.3 — assert pdns forwarded 2ip.ru query (domain resolved via pdns WebSocket)"
+  ansible.builtin.assert:
+    that: (_pdns_log.stdout + _pdns_log.stderr) is search('2ip\.ru')
+    fail_msg: "pdns logs have no entries for 2ip.ru — domain not resolved or not forwarded to WebSocket"
+
+- name: "§8.3 — read public IP seen by wg-client via ifconfig.co"
+  community.docker.docker_container_exec:
+    container: wg-client
+    argv: [wget, -qO-, --timeout=5, "http://ifconfig.co"]
+  become: true
+  register: _pub_ip
+  changed_when: false
+  failed_when: _pub_ip.rc != 0
+
+- name: "§8.3 — assert wg-client egresses via de ({{ hostvars['localhost'].de_public_ip }}), not hub direct"
+  ansible.builtin.assert:
+    that:
+      - _pub_ip.stdout | trim == hostvars['localhost'].de_public_ip
+      - _pub_ip.stdout | trim != hostvars['localhost'].hub_public_ip
+    fail_msg: |
+      Public IP via wg-client is '{{ _pub_ip.stdout | trim }}'.
+      Expected: {{ hostvars['localhost'].de_public_ip }} (de edge, primary non-RU egress).
+      Not expected: {{ hostvars['localhost'].hub_public_ip }} (hub direct).

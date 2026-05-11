@@ -1,0 +1,87 @@
+# Terraform/OpenTofu variable values for examples/mini-site/infra.
+# Copy this file to terraform.tfvars and fill in your real values.
+#
+# Domains:   replace example.net with your real DNS zone.
+# IPs:       replace RFC 5737 addresses with your real public IPs / CIDRs.
+# Cloud IDs: replace placeholder IDs with your real cloud resource IDs.
+# Secrets:   routeros_password, yc_service_account_key_json, gcp_credentials_json,
+#            cloudflare_api_token are sensitive — keep them out of VCS.
+
+env_slug = "mini-site"
+
+yc = {
+  cloud_id          = "my-yc-cloud-id"
+  folder_id         = "my-yc-folder-id"
+  zone              = "ru-central1-a"
+  network_id        = "my-yc-network-id"
+  primary_subnet_id = "my-yc-subnet-id"
+}
+
+yc_service_account_key_json = <<EOT
+{ "id": "...", "service_account_id": "...", "key_algorithm": "RSA_2048" }
+EOT
+
+gcp = {
+  project_id = "my-gcp-project"
+}
+
+gcp_credentials_json = <<EOT
+{ "type": "service_account", "project_id": "my-gcp-project" }
+EOT
+
+cloudflare = {
+  zone_name = "example.net"
+}
+
+cloudflare_api_token = "my-cloudflare-api-token"
+
+routeros = {
+  hostname         = "routeros-example"
+  management_host  = "203.0.113.1"
+  user             = "admin"
+  uplink_interface = "ether1"
+}
+
+routeros_password = "my-routeros-password"
+
+hub = {
+  cores            = 2
+  memory_gb        = 4
+  boot_disk_gb     = 20
+  data_disk_gb     = 20
+  existing_disk_id = null  # null = create new data disk; set to existing disk ID to reuse
+}
+
+hub_fqdn_prefix = "hub"
+base_domain     = "example.net"
+
+edges = {
+  pt = {
+    machine_type        = "e2-small"
+    boot_disk_gb        = 20
+    region              = "us-central1"
+    zone                = "us-central1-a"
+    fqdn_prefix         = "pt"
+    hub_cidr            = "192.0.2.129/28"
+    peer_cidr           = "192.0.2.130/28"
+    listen_port         = 51820
+    ospf_router_id_hub  = "198.51.100.20"
+    ospf_router_id_peer = "198.51.100.23"
+  }
+  de = {
+    machine_type        = "e2-small"
+    boot_disk_gb        = 20
+    region              = "europe-west3"
+    zone                = "europe-west3-a"
+    fqdn_prefix         = "de"
+    hub_cidr            = "192.0.2.145/28"
+    peer_cidr           = "192.0.2.146/28"
+    listen_port         = 51821
+    ospf_router_id_hub  = "198.51.100.30"
+    ospf_router_id_peer = "198.51.100.33"
+  }
+}
+
+operator_ssh_keys = [
+  "operator:ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIexample operator@example",
+]

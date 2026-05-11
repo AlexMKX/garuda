@@ -1,0 +1,95 @@
+---
+# Constants used across Z2G phases. Single source of truth for the values
+# hardcoded in dev/vpn2/checklist.md § 3-8.
+
+# z2g_stand_root: garuda-repo repository root (used by phase_1 for pytest).
+# playbook_dir = examples/mini-site/smoke, so ../../.. = garuda-repo root.
+z2g_stand_root: "{{ playbook_dir }}/../../.."
+
+# z2g_terraform_dir: active garuda Terraform unit (examples/mini-site/garuda).
+# playbook_dir = examples/mini-site/smoke, so .. = examples/mini-site/garuda.
+z2g_terraform_dir: "{{ playbook_dir }}/../garuda"
+
+# Container naming: wg-<tunnel>-wg-<tunnel>-1, with optional environment
+# prefix. The wireguard role uses env_slug to namespace docker compose
+# projects, so live tunnels look like `<env_slug>-wg-<tunnel>-wg-<tunnel>-1`
+# while the public example example uses no prefix.
+#
+# z2g_compose_project_prefix is overridden in env-specific group_vars
+# (e.g. test-config/vpn2/smoke/group_vars/all.yml sets it to "test-xxl-").
+z2g_compose_project_prefix: ""
+z2g_wg_pt_container: "{{ z2g_compose_project_prefix }}wg-pt-wg-pt-1"
+z2g_wg_de_container: "{{ z2g_compose_project_prefix }}wg-de-wg-de-1"
+z2g_wg_hub_ros_container: "{{ z2g_compose_project_prefix }}wg-hub-ros-wg-hub-ros-1"
+z2g_ospf_wg_pt_container: "ospf-{{ z2g_wg_pt_container }}"
+z2g_ospf_wg_de_container: "ospf-{{ z2g_wg_de_container }}"
+z2g_ospf_wg_hub_ros_container: "ospf-{{ z2g_wg_hub_ros_container }}"
+
+# Workload containers (no env_slug prefix; managed by mini-site/garuda).
+z2g_ipt_server_container: "ipt_server-garuda_ipt-1"
+z2g_ipt_server_pdns_container: "ipt_server-garuda_pdns-1"
+z2g_ospf_ipt_server_container: "ospf-{{ z2g_ipt_server_container }}"
+z2g_firezone_container: "firezone-firezone-1"
+z2g_ospf_firezone_container: "ospf-{{ z2g_firezone_container }}"
+z2g_backbone_ospf_injector_container: "backbone-ospf_injector-1"
+
+# Expected containers per host (phase 3).
+# OSPF is consolidated into backbone-ospf_injector-1 per host; only
+# ipt_server and firezone keep dedicated ospf-* sidecars on hub.
+z2g_expected_containers_hub:
+  - "{{ z2g_wg_hub_ros_container }}"
+  - "{{ z2g_wg_pt_container }}"
+  - "{{ z2g_wg_de_container }}"
+  - "{{ z2g_ipt_server_container }}"
+  - "{{ z2g_ipt_server_pdns_container }}"
+  - "{{ z2g_ospf_ipt_server_container }}"
+  - "{{ z2g_firezone_container }}"
+  - "{{ z2g_ospf_firezone_container }}"
+  - "{{ z2g_backbone_ospf_injector_container }}"
+
+z2g_expected_containers_pt:
+  - "{{ z2g_wg_pt_container }}"
+  - "{{ z2g_backbone_ospf_injector_container }}"
+
+z2g_expected_containers_de:
+  - "{{ z2g_wg_de_container }}"
+  - "{{ z2g_backbone_ospf_injector_container }}"
+
+# Network invariants (phase 3.5, 7).
+z2g_border_subnet: "192.0.2.64/26"
+z2g_backbone_subnet: "192.0.2.0/26"
+z2g_wg_hub_ros_subnet: "192.0.2.160/28"
+z2g_wg_pt_subnet: "192.0.2.128/28"
+z2g_wg_de_subnet: "192.0.2.144/28"
+
+# OSPF constants (phase 5, 6, 7).
+z2g_ipt_server_router_id: "198.51.100.99"
+z2g_routeros_wg_hub_ros_neighbor: "192.0.2.161"
+
+# WireGuard handshake freshness (phase 4).
+z2g_wg_handshake_max_age_seconds: 180
+
+# PBR mark / tables (phase 7).
+z2g_pbr_mark: "0x200"
+z2g_geo_table: 200
+z2g_transit_table: 201
+
+# Public IPs for client connectivity checks (phase 8 / 8b / 10) are
+# *not* hardcoded here — they are set as facts by Phase 0 of z2g.yml
+# from terraform outputs (`pt_public_ip`, `de_public_ip`)
+# and from `ansible_smoke_inventory` (`hub_public_ip`).  Tasks
+# reference those facts directly; this keeps GCP IP rotation /
+# stand recreation invisible to the smoke playbook.
+
+# Phase 11 — egress pinning. The pinning API listens on the ipt_server
+# container's backbone IP and is called from a transit-attached client
+# (firezone wg client whose backbone-side saddr the API observes via
+# request.remote).
+ipt_server_backbone_ip: "192.0.2.3"
+ipt_server_host: "hub-mini-site"
+pinning_test_client_host: "fz-client-example"
+pinning_test_client_saddr: "192.0.2.5"
+pinning_wg_client_container: "wg-client"
+
+# RouterOS LAN gateway reachable through the WireGuard hub-ros tunnel (phase 8).
+z2g_routeros_lan_gw: "198.51.100.1"

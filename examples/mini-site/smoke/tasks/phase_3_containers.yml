@@ -1,0 +1,41 @@
+---
+# Phase 3: container health on linux_hosts.
+# Uses community.docker.docker_container_info for precise state + healthcheck status.
+- name: "§3 — select expected containers for {{ inventory_hostname }}"
+  ansible.builtin.set_fact:
+    _expected_containers: >-
+      {{ z2g_expected_containers_hub if z2g_role == 'hub'
+         else (z2g_expected_containers_pt if z2g_role == 'pt'
+         else (z2g_expected_containers_de if z2g_role == 'de' else [])) }}
+
+- name: "§3 — inspect expected containers"
+  community.docker.docker_container_info:
+    name: "{{ item }}"
+  become: true
+  register: _container_info
+  loop: "{{ _expected_containers }}"
+  loop_control:
+    label: "{{ item }}"
+  when: _expected_containers | length > 0
+
+- name: "§3 — assert each expected container is present and running/healthy"
+  ansible.builtin.assert:
+    that:
+      - item.exists | bool
+      - item.exists and (item.container.State.Running | bool)
+      - item.exists and ((item.container.State.Health.Status | default('healthy')) in ['healthy', 'starting'])
+    fail_msg: >-
+      Container '{{ item.item }}' on {{ inventory_hostname }}:
+      exists={{ item.exists | default(false) }},
+      running={{ item.container.State.Running | default(false) if item.exists else false }},
+      health={{ item.container.State.Health.Status | default('n/a') if item.exists else 'n/a' }}
+  loop: "{{ _container_info.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+  register: _container_assert_results
+  ignore_errors: true
+
+- name: "§3 — fail if any container check failed"
+  ansible.builtin.fail:
+    msg: "One or more container checks failed on {{ inventory_hostname }}"
+  when: _container_assert_results is defined and _container_assert_results.failed | default(false)

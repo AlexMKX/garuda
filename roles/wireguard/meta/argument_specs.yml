@@ -6,7 +6,7 @@ argument_specs:
       wireguard_tunnel_name:
         type: str
         required: false
-        description: Tunnel directory name; defaults to wireguard_interface_name.
+        description: Tunnel directory name; defaults to wireguard_interface_name when null.
       wireguard_interface_name:
         type: str
         required: true
@@ -20,13 +20,52 @@ argument_specs:
       wireguard_table:
         type: raw
         required: true
+      wireguard_listen_port:
+        type: int
+        required: false
+      wireguard_public_endpoint:
+        type: str
+        required: false
       wireguard_peer_public_key:
         type: str
         required: true
-      wireguard_peer_allowed_ips:
+      wireguard_peer_address:
+        type: str
+        required: true
+        description: Raw peer tunnel address (CIDR). The role derives /32 AllowedIPs internally.
+      wireguard_peer_endpoint_host:
+        type: str
+        required: false
+      wireguard_peer_listen_port:
+        type: int
+        required: false
+      wireguard_peer_preshared_key:
+        type: str
+        required: false
+        no_log: true
+      wireguard_peer_persistent_keepalive:
+        type: int
+        required: false
+      wireguard_allowed_nets:
         type: list
         elements: str
-        required: true
+        required: false
+        default: []
+      wireguard_post_up:
+        type: str
+        required: false
+      wireguard_pre_down:
+        type: str
+        required: false
+      wireguard_labels:
+        type: dict
+        required: false
+        default: {}
+      wireguard_nic_attach:
+        type: list
+        elements: str
+        required: false
+        default: []
       wireguard_mesh_root:
         type: str
         required: false
@@ -46,7 +85,7 @@ argument_specs:
         required: false
       wireguard_interface_name:
         type: str
-        required: false
+        required: true
       wireguard_mesh_root:
         type: str
         required: false

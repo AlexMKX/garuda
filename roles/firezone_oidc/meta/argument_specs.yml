@@ -3,19 +3,31 @@ argument_specs:
   provision:
     short_description: Reconcile OIDC providers on a running Firezone instance.
     options:
+      firezone_oidc_dir:
+        type: str
+        required: false
+        default: /opt/garuda/firezone
+        description: Directory where the Firezone compose project lives.
       firezone_oidc_server_url:
         type: str
         required: true
       firezone_oidc_providers:
         type: dict
         required: true
-      firezone_oidc_dir:
-        type: str
-        required: false
-        default: /opt/garuda/firezone
+        description: Map of provider configurations to reconcile.
       firezone_oidc_api_url:
         type: str
         required: false
   destroy:
-    short_description: No-op (OIDC providers are destroyed with the Firezone stack).
-    options: {}
+    short_description: Purge all OIDC providers from a running Firezone instance.
+    options:
+      firezone_oidc_dir:
+        type: str
+        required: false
+        default: /opt/garuda/firezone
+      firezone_oidc_server_url:
+        type: str
+        required: true
+      firezone_oidc_api_url:
+        type: str
+        required: false

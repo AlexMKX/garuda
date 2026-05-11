@@ -7,10 +7,17 @@ argument_specs:
         type: str
         required: true
         description: Absolute path on target host for the compose project.
+      backbone_subnet:
+        type: str
+        required: true
+        description: CIDR subnet for the backbone bridge network.
+      border_subnet:
+        type: str
+        required: true
+        description: CIDR subnet for the border bridge network.
   destroy:
-    short_description: Remove OSPF injector compose stack and directory.
+    short_description: Remove backbone compose stack and directory.
     options:
       backbone_dir:
         type: str
         required: true
-        description: Absolute path on target host for the compose project.

@@ -139,16 +139,3 @@
   ansible.builtin.set_fact:
     fz_firezone_container_id: null
 
-- name: Publish structured Firezone workload outputs
-  ansible.builtin.copy:
-    dest: "{{ workload_result_path }}"
-    content: |
-      {
-        "outputs": {
-          "firezone_dir": {{ fz_firezone_dir | to_json }}
-        }
-      }
-    mode: "0600"
-  delegate_to: localhost
-  become: false
-  when: workload_result_path | default('') | length > 0

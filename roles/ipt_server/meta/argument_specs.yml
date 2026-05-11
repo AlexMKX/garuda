@@ -1,17 +1,76 @@
 ---
 argument_specs:
   provision:
-    short_description: Deploy the ipt_server compose stack.
+    short_description: Deploy the ipt_server compose stack with PBR and per-source pinning.
     options:
       ipt_server_dir:
         type: str
         required: true
+        description: Target directory for the IPT compose project on the host.
       ipt_server_image:
         type: str
         required: true
+        description: ipt_server container image reference.
       ipt_powerdns_image:
         type: str
         required: true
+        description: PowerDNS container image reference.
+      ipt_interfaces:
+        type: list
+        elements: str
+        required: false
+        default: []
+        description: Network interfaces ipt_server attaches to for PBR/input handling.
+      ipt_routes:
+        type: list
+        elements: dict
+        required: false
+        default: []
+        description: Ordered routing policy entries. Each entry groups one ordered member list and one rules list.
+        options:
+          route:
+            type: list
+            elements: dict
+            required: true
+            options:
+              gw:
+                type: str
+                required: false
+              dev:
+                type: str
+                required: false
+          rules:
+            type: list
+            elements: str
+            required: true
+      ipt_nic_attach:
+        type: list
+        elements: str
+        required: false
+        default: []
+        description: Additional transport networks to attach beyond backbone (always implicit).
+      ipt_clean_conntrack:
+        type: bool
+        required: false
+        default: false
+      ipt_domain_route_ttl:
+        type: int
+        required: false
+        default: 300
+      ipt_server_labels:
+        type: dict
+        required: false
+        default: {}
+        description: Docker container labels rendered onto the workload service.
+      ipt_pinning_egress:
+        type: dict
+        required: false
+        default: {}
+        description: Egress catalog for per-source-IP pinning. Each entry sets exactly one of gw or dev.
+      ipt_pinning_ttl:
+        type: int
+        required: false
+        default: 86400
   destroy:
     short_description: Tear down the ipt_server compose stack.
     options:

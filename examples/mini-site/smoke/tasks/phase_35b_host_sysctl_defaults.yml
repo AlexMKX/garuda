@@ -1,0 +1,74 @@
+---
+# Phase 3.5b — verify host-level sysctl state is limited to what
+# linux_host_prerequisites writes, and legacy host-level sysctl
+# drop-ins from the earlier sysctl_settings era are absent (plan:
+# docs/superpowers/plans/2026-04-19-remove-host-level-sysctls.md).
+#
+# Runs on linux_hosts (hub, pt, de). Asserts:
+#  - /etc/sysctl.d/99-garuda-prerequisites.conf is absent (legacy name
+#    from before the role-scoped rename).
+#  - The only project-named sysctl drop-in under /etc/sysctl.d/ is
+#    99-garuda-linux_host_prerequisites.conf, which linux_host_prerequisites
+#    owns in order to persist net.ipv4.ip_forward=1 (Docker 29+ no longer
+#    sets the sysctl itself despite "ip-forward": true in daemon.json).
+#  - net.ipv4.ip_forward is 1.
+
+- name: "§3.5b — stat /etc/sysctl.d/99-garuda-prerequisites.conf"
+  ansible.builtin.stat:
+    path: /etc/sysctl.d/99-garuda-prerequisites.conf
+  become: true
+  register: _legacy_sysctl_garuda
+
+- name: "§3.5b — assert legacy sysctl override file is absent"
+  ansible.builtin.assert:
+    that:
+      - not _legacy_sysctl_garuda.stat.exists
+    fail_msg: >-
+      Legacy sysctl override file /etc/sysctl.d/99-garuda-prerequisites.conf
+      still exists on {{ inventory_hostname }}. Run
+      `ansible-playbook playbooks/cleanup_host_sysctl_overrides.yml`
+      from the garuda collection to remove it.
+
+- name: "§3.5b — find any unexpected /etc/sysctl.d/ files with garuda in name"
+  ansible.builtin.find:
+    paths: /etc/sysctl.d
+    patterns: "*garuda*.conf"
+    excludes: "99-garuda-linux_host_prerequisites.conf"
+  become: true
+  register: _project_sysctl_files
+
+- name: "§3.5b — assert no unexpected project-named sysctl files remain"
+  ansible.builtin.assert:
+    that: _project_sysctl_files.matched == 0
+    fail_msg: >-
+      Unexpected project-named sysctl file(s) on {{ inventory_hostname }}:
+      {{ _project_sysctl_files.files | map(attribute='path') | list }}.
+      Only 99-garuda-linux_host_prerequisites.conf (written by
+      linux_host_prerequisites to enable net.ipv4.ip_forward) is allowed.
+
+- name: "§3.5b — read net.ipv4.ip_forward"
+  ansible.builtin.command:
+    cmd: sysctl -n net.ipv4.ip_forward
+  become: true
+  register: _ip_forward
+  changed_when: false
+
+- name: "§3.5b — assert ip_forward is 1 (Docker ip-forward:true in daemon.json)"
+  ansible.builtin.assert:
+    that: _ip_forward.stdout | int == 1
+    fail_msg: >-
+      net.ipv4.ip_forward on {{ inventory_hostname }} is
+      {{ _ip_forward.stdout }}, expected 1. Docker daemon normally
+      enables this via ip-forward:true in daemon.json. Check
+      `systemctl status docker` and `cat /etc/docker/daemon.json`.
+
+- name: "§3.5b — read net.ipv4.conf.all.rp_filter"
+  ansible.builtin.command:
+    cmd: sysctl -n net.ipv4.conf.all.rp_filter
+  become: true
+  register: _rp_filter_all
+  changed_when: false
+
+- name: "§3.5b — report rp_filter (diagnostic, not asserted)"
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }} net.ipv4.conf.all.rp_filter={{ _rp_filter_all.stdout }}"

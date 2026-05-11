@@ -1,4 +1,0 @@
----
-- name: No-op destroy for behavioural test fixture
-  ansible.builtin.debug:
-    msg: "destroy lifecycle: test_linux_apply fixture has nothing to tear down"

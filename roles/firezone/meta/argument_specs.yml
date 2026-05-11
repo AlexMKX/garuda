@@ -16,9 +16,42 @@ argument_specs:
         type: str
         required: false
         no_log: true
-      workload_result_path:
+      fz_admin:
         type: str
         required: false
+        default: "fz-admin@localhost"
+      fz_client_subnet:
+        type: str
+        required: false
+        default: "10.11.0.0/24"
+      fz_wireguard_port:
+        type: str
+        required: false
+        default: "51620"
+      fz_firezone_https:
+        type: bool
+        required: false
+        default: true
+      fz_server_url:
+        type: str
+        required: false
+      fz_mgmt_subnet:
+        type: str
+        required: false
+      fz_nic_attach:
+        type: list
+        elements: str
+        required: false
+        default:
+          - backbone
+      fz_masquerade:
+        type: bool
+        required: false
+        default: false
+      firezone_labels:
+        type: dict
+        required: false
+        default: {}
   destroy:
     short_description: Tear down the Firezone compose stack.
     options:

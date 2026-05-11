@@ -19,13 +19,15 @@ services:
       timeout: 15s
       retries: 3
       start_period: 2m
-{% if wireguard_listen_port and wireguard_public_endpoint %}
+{% if wireguard_listen_port | default(none) is not none and wireguard_public_endpoint | default('') %}
     ports:
       - "{{ wireguard_listen_port }}:{{ wireguard_listen_port }}/udp"
 {% endif %}
     networks:
-      wireguard_net:
+      wireguard_net: {}
+{% if _nets.service %}
 {{ _nets.service | to_nice_yaml(indent=2) | indent(6, true) }}
+{% endif %}
     sysctls:
       - net.ipv4.ip_forward=1
       - net.ipv4.conf.all.src_valid_mark=1
@@ -34,4 +36,6 @@ services:
 networks:
   wireguard_net:
     driver: bridge
+{% if _nets.stack %}
 {{ _nets.stack | to_nice_yaml(indent=2) | indent(2, true) }}
+{% endif %}

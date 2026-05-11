@@ -1,0 +1,40 @@
+---
+# Phase 4: WireGuard tunnel handshake freshness and transfer.
+# Runs on hub (wg-hub_ros + wg-pt + wg-de) and pt (wg-pt), de (wg-de).
+# Tunnel names use dashes after env_slug-mandatory rename.
+- name: "§4 — choose tunnels per host"
+  ansible.builtin.set_fact:
+    _wg_tunnels: >-
+      {{ ['wg-hub-ros', 'wg-pt', 'wg-de'] if z2g_role == 'hub'
+         else (['wg-pt'] if z2g_role == 'pt'
+         else (['wg-de'] if z2g_role == 'de' else [])) }}
+
+- name: "§4 — read WireGuard dump"
+  community.docker.docker_container_exec:
+    container: "{{ z2g_compose_project_prefix }}{{ item }}-{{ item }}-1"
+    argv: [wg, show, "{{ item }}", dump]
+  become: true
+  register: _wg_dump
+  changed_when: false
+  loop: "{{ _wg_tunnels }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: "§4 — assert handshake fresh and non-zero transfer"
+  ansible.builtin.assert:
+    that:
+      # wg dump line format: pubkey presharedkey endpoint allowed_ips latest_handshake rx tx keepalive
+      - (item.stdout_lines | length) >= 2
+      - >-
+        (item.stdout_lines[1].split('\t')[4] | int) > 0
+        and (lookup('pipe', 'date +%s') | int) - (item.stdout_lines[1].split('\t')[4] | int)
+            < z2g_wg_handshake_max_age_seconds
+      - (item.stdout_lines[1].split('\t')[5] | int) > 0
+      - (item.stdout_lines[1].split('\t')[6] | int) > 0
+    fail_msg: |
+      Tunnel {{ item.item }} on {{ inventory_hostname }} failed handshake/transfer check.
+      Output:
+      {{ item.stdout }}
+  loop: "{{ _wg_dump.results }}"
+  loop_control:
+    label: "{{ item.item }}"

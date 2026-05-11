@@ -1,9 +1,0 @@
----
-galaxy_info:
-  author: Alex MK
-  description: Fixture role used by linux_apply behavioral and contract tests.
-  license: GPL-2.0-or-later
-  min_ansible_version: "2.15"
-  galaxy_tags: []
-
-dependencies: []

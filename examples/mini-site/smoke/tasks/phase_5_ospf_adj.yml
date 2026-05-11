@@ -1,0 +1,31 @@
+---
+# Phase 5: OSPF adjacency — Linux side (vtysh in FRR sidecars).
+- name: "§5 — choose OSPF sidecars per host"
+  ansible.builtin.set_fact:
+    _ospf_sidecars: >-
+      {{ [z2g_ospf_ipt_server_container] if z2g_role == 'hub'
+         else ([z2g_ospf_wg_pt_container] if z2g_role == 'pt'
+         else ([z2g_ospf_wg_de_container] if z2g_role == 'de'
+         else [])) }}
+
+- name: "§5 — read OSPF neighbor state"
+  community.docker.docker_container_exec:
+    container: "{{ item }}"
+    argv: [vtysh, -c, "show ip ospf neighbor"]
+  become: true
+  register: _vtysh
+  changed_when: false
+  loop: "{{ _ospf_sidecars }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: "§5 — assert at least one Full-state OSPF neighbor per sidecar"
+  ansible.builtin.assert:
+    that: item.stdout is search('Full/')
+    fail_msg: |
+      Sidecar {{ item.item }} on {{ inventory_hostname }} has no Full-state neighbor.
+      Output:
+      {{ item.stdout }}
+  loop: "{{ _vtysh.results }}"
+  loop_control:
+    label: "{{ item.item }}"

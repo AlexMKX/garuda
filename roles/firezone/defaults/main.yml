@@ -1,25 +1,21 @@
 ---
-# Purpose: Define default variables for Firezone deployment and bootstrap behavior.
+# Purpose: Default variables for firezone role.
 # Entry points: Loaded automatically by roles/firezone.
-# Inputs: Optional fz_config map overrides from inventory/play vars.
-# Outputs: Derived fz_* defaults for compose and networking settings.
-# Side effects: None; variable defaults only.
+# Inputs: Flat top-level vars from linux_apply payload.
+# Outputs: None; variable defaults only.
+# Side effects: None.
 # Tags: n/a.
 
-fz_config: {}
-## Firezone admin email
-fz_client_subnet: "{{fz_config['fz_client_subnet'] | default ('10.11.0.0/24')}}"
-fz_admin: "{{fz_config['fz_admin'] | default ('fz-admin@localhost')}}"
-fz_admin_password: "{{fz_config['fz_admin_password'] | default (lookup('community.general.random_string', base64=true, length=12))  }}"
-fz_wireguard_port: "{{fz_config['fz_wireguard_port'] | default ('51620')}}"
-fz_firezone_dir: /opt/garuda/firezone
-fz_firezone_https: "{{fz_config['fz_firezone_https'] | default (true)}}"
-fz_server_url: "{{fz_config['fz_server_url'] | default ('https://'+ansible_host)}}"
-fz_mgmt_subnet: "{{fz_config['fz_mgmt_subnet'] | default ()}}"
-fz_firezone_image: "{{fz_config['fz_firezone_image'] | default ('local/firezone:0.7.30-nftedgefix')}}"
-
-# Backbone / policy routing
-fz_nic_attach: "{{ fz_config['fz_nic_attach'] | default(['backbone']) }}"
+fz_client_subnet: "10.11.0.0/24"
+fz_admin: "fz-admin@localhost"
+fz_admin_password: "{{ lookup('community.general.random_string', base64=true, length=12) }}"
+fz_wireguard_port: "51620"
+fz_firezone_https: true
+fz_server_url: "https://{{ ansible_host }}"
+fz_mgmt_subnet: null
+fz_nic_attach:
+  - backbone
+fz_masquerade: false
 
 # Firezone built-in egress masquerade.
 #
@@ -39,6 +35,5 @@ fz_nic_attach: "{{ fz_config['fz_nic_attach'] | default(['backbone']) }}"
 # falls back to its built-in upstream masquerade on every non-wg interface.
 # Without it, client traffic will leave the host with a non-routable
 # 10.0.24.0/24 source and be silently dropped by the upstream router.
-fz_masquerade: "{{ fz_config['fz_masquerade'] | default(false) }}"
 
 firezone_labels: {}

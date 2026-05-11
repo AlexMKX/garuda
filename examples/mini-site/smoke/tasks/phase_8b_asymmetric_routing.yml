@@ -1,0 +1,116 @@
+---
+# Phase 8b — prove asymmetric routing still works after removing
+# host-level rp_filter overrides.
+#
+# Scenario: a host behind RouterOS pings a non-RU egress (pt public IP)
+# through the wg-hub-ros tunnel. The packet enters the hub-side
+# wg-hub-ros sidecar on the wg-hub-ros interface, the sidecar's RPDB
+# rule "from all iif wg-hub-ros lookup 201" steers it into the
+# transit table, transit table's default points at ipt_server, and
+# ipt_server steers it through the geo-router's non-RU exit
+# (wg-pt or wg-de depending on geo policy). The reply comes back on
+# a different interface (asymmetric path), exercising the rp_filter
+# behavior we previously had to override on the host. If host
+# rp_filter were re-enabled, the reply would be dropped.
+#
+# We use RouterOS itself as the ingress source (its tunnel-side IP
+# 10.9.20.2 / the configured neighbor address) — that produces a real
+# packet entering the hub-side sidecar over wg-hub-ros, which is what
+# the transit-routing path is designed for. Locally generated traffic
+# from inside the sidecar bypasses the RPDB rule (it is not "iif
+# wg-hub-ros") and so cannot exercise the same code path.
+
+- name: "§8b — skip unless this is hub"
+  ansible.builtin.meta: end_host
+  when:
+    - z2g_role is defined
+    - z2g_role != 'hub'
+
+- name: "§8b — read container netns routing table for wg-hub-ros sidecar"
+  community.docker.docker_container_exec:
+    container: "ospf-{{ z2g_wg_hub_ros_container }}"
+    argv: [ip, route, show]
+  become: true
+  register: _wg_hub_ros_routes
+  changed_when: false
+
+- name: "§8b — assert wg-hub-ros sidecar has a route to the backbone subnet"
+  ansible.builtin.assert:
+    that: _wg_hub_ros_routes.stdout is search(z2g_backbone_subnet | regex_escape)
+    fail_msg: "wg-hub-ros sidecar missing route to {{ z2g_backbone_subnet }}"
+
+- name: "§8b — assert wg-hub-ros sidecar has transit table 201 default via ipt_server"
+  community.docker.docker_container_exec:
+    container: "ospf-{{ z2g_wg_hub_ros_container }}"
+    argv: [ip, route, show, table, "{{ z2g_transit_table }}"]
+  become: true
+  register: _wg_hub_ros_transit
+  changed_when: false
+
+- name: "§8b — assert transit table 201 has a default route"
+  ansible.builtin.assert:
+    that: _wg_hub_ros_transit.stdout is search('default')
+    fail_msg: |
+      wg-hub-ros sidecar transit table {{ z2g_transit_table }} has no default
+      route — transit_watcher.py has not picked up the transit provider yet.
+      Got: {{ _wg_hub_ros_transit.stdout }}
+
+- name: "§8b — reach pt public IP from ipt_server container (baseline, curl)"
+  community.docker.docker_container_exec:
+    container: ipt_server-garuda_ipt-1
+    argv:
+      - curl
+      - -sf
+      - -o
+      - /dev/null
+      - --connect-timeout
+      - "5"
+      - "http://{{ hostvars['localhost'].pt_public_ip }}"
+  become: true
+  register: _ipt_reach_pt
+  changed_when: false
+  # rc 7 = connection refused (host is up, no HTTP), rc 0 = success; both prove reachability
+  failed_when: _ipt_reach_pt.rc not in [0, 7]
+
+# Real ingress simulation: ask RouterOS to ping pt public IP. RouterOS uses
+# its OSPF-learned default route, which exits over the wg-hub-ros tunnel and
+# hits the hub-side sidecar's wg-hub-ros interface — exactly the path the
+# RPDB rule "from all iif wg-hub-ros lookup 201" is meant to catch. Use raw
+# ssh delegated to localhost to avoid network_cli persistent-connection
+# quirks (same pattern as phase_5/phase_6 RouterOS tasks).
+- name: "§8b — ping pt public IP from RouterOS (real ingress through wg-hub-ros)"
+  ansible.builtin.command:
+    cmd: >-
+      ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      -i ~/.ssh/id_ed25519
+      admin@{{ hostvars[groups['routeros'][0]].ansible_host }}
+      "/tool/ping address={{ hostvars['localhost'].pt_public_ip }} count=3 interval=1s"
+  delegate_to: localhost
+  register: _ros_transit_ping
+  changed_when: false
+  failed_when: false
+  timeout: 30
+
+- name: "§8b — assert RouterOS transit ping reached pt public IP"
+  ansible.builtin.assert:
+    that:
+      - _ros_transit_ping.stdout is search('received=[1-9]')
+    fail_msg: |
+      RouterOS could not reach pt public IP via the wg-hub-ros tunnel.
+      This is the asymmetric-routing smoke: ingress through wg-hub-ros,
+      egress via the geo-router's non-RU path (wg-pt/wg-de).
+      Output:
+      {{ _ros_transit_ping.stdout }}
+      {{ _ros_transit_ping.stderr }}
+
+- name: "§8b — read container-netns rp_filter from wg-hub-ros sidecar (diagnostic)"
+  community.docker.docker_container_exec:
+    container: "ospf-{{ z2g_wg_hub_ros_container }}"
+    argv: [sysctl, -n, net.ipv4.conf.all.rp_filter]
+  become: true
+  register: _wg_hub_ros_rpf
+  changed_when: false
+
+- name: "§8b — report container-netns rp_filter (diagnostic)"
+  ansible.builtin.debug:
+    msg: "ospf-{{ z2g_wg_hub_ros_container }} net.ipv4.conf.all.rp_filter={{ _wg_hub_ros_rpf.stdout }}"

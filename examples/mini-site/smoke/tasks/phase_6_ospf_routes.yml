@@ -1,0 +1,46 @@
+---
+# Phase 5+6 (RouterOS): OSPF neighbor adjacency and route learning on RouterOS.
+# Uses raw SSH delegated to localhost — avoids network_cli persistent-connection
+# issues with RouterOS (no POSIX shell, paramiko fallback, "No existing session").
+- name: "§5 — read RouterOS OSPF neighbor table"
+  ansible.builtin.command:
+    cmd: >-
+      ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      -i ~/.ssh/id_ed25519
+      admin@{{ ansible_host }}
+      "/routing/ospf/neighbor/print"
+  delegate_to: localhost
+  register: _ros_nei
+  changed_when: false
+
+- name: "§5 — assert RouterOS has Full-state OSPF neighbor {{ z2g_routeros_wg_hub_ros_neighbor }}"
+  ansible.builtin.assert:
+    that:
+      - _ros_nei.stdout is search(z2g_routeros_wg_hub_ros_neighbor | regex_escape)
+      - _ros_nei.stdout is search('Full')
+    fail_msg: |
+      RouterOS OSPF neighbor {{ z2g_routeros_wg_hub_ros_neighbor }} not in Full state.
+      Output:
+      {{ _ros_nei.stdout }}
+
+- name: "§6 — read RouterOS routes learned via OSPF"
+  ansible.builtin.command:
+    cmd: >-
+      ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10
+      -i ~/.ssh/id_ed25519
+      admin@{{ ansible_host }}
+      "/ip/route/print where ospf"
+  delegate_to: localhost
+  register: _ros_routes
+  changed_when: false
+
+- name: "§6 — assert RouterOS learned default route and backbone/wg_pt subnets via OSPF"
+  ansible.builtin.assert:
+    that:
+      - _ros_routes.stdout is search('0\.0\.0\.0/0')
+      - _ros_routes.stdout is search(z2g_backbone_subnet | regex_escape)
+      - _ros_routes.stdout is search(z2g_wg_pt_subnet | regex_escape)
+    fail_msg: |
+      RouterOS missing expected OSPF-learnt routes (0.0.0.0/0, {{ z2g_backbone_subnet }}, {{ z2g_wg_pt_subnet }}).
+      Output:
+      {{ _ros_routes.stdout }}

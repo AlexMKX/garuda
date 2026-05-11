@@ -1,0 +1,45 @@
+---
+# Checklist §2: terraform init/plan/apply. DESTRUCTIVE.
+# Default behaviour: skip entirely with a clear message.
+# Opt-in: -e allow_apply=yes
+- name: "§2 — guard: phase 2 skipped (allow_apply not set)"
+  ansible.builtin.debug:
+    msg: "Phase 2 (terraform apply) skipped — pass -e allow_apply=yes to enable"
+  when: not (allow_apply | default(false) | bool)
+
+- name: "§2 — guard: skip remaining apply tasks"
+  ansible.builtin.meta: end_host
+  when: not (allow_apply | default(false) | bool)
+
+- name: "§2 — notice: apply is enabled"
+  ansible.builtin.debug:
+    msg: "allow_apply=yes set; running terraform init/plan/apply"
+
+- name: "§2 — terragrunt init"
+  ansible.builtin.command:
+    cmd: terragrunt init -input=false
+    chdir: "{{ z2g_terraform_dir }}"
+  register: _tf_init
+  changed_when: "'has been successfully initialized' in _tf_init.stdout"
+  failed_when: _tf_init.rc != 0
+
+- name: "§2 — terragrunt plan"
+  ansible.builtin.command:
+    cmd: terragrunt plan -input=false -out=tfplan.z2g
+    chdir: "{{ z2g_terraform_dir }}"
+  register: _tf_plan
+  changed_when: false
+  failed_when: _tf_plan.rc != 0
+
+- name: "§2 — terragrunt apply"
+  ansible.builtin.command:
+    cmd: terragrunt apply -input=false -auto-approve tfplan.z2g
+    chdir: "{{ z2g_terraform_dir }}"
+  register: _tf_apply
+  changed_when: "'Apply complete' in _tf_apply.stdout"
+  failed_when: _tf_apply.rc != 0
+
+- name: "§2 — remove consumed plan file"
+  ansible.builtin.file:
+    path: "{{ z2g_terraform_dir }}/tfplan.z2g"
+    state: absent

@@ -85,13 +85,17 @@
 
 # --- Preflight: resolve local API URL ---
 
+# `firezone_oidc_api_url is defined` is not enough on its own: when payload
+# is published as top-level vars, the key is always defined (from the
+# generated wrapper), but its value can be null when the caller does not
+# supply an override. Treat null/empty as "no override" — fall back to
+# resolving the bridge IP of the running firezone container.
 - name: Get Firezone container network info (bridge mode)
   community.docker.docker_container_info:
     name: "{{ firezone_oidc_container_id }}"
   register: firezone_oidc_container_info
   become: true
-  when:
-    - firezone_oidc_api_url is not defined
+  when: (firezone_oidc_api_url | default(none)) is none
 
 - name: Set API URL from container bridge IP
   ansible.builtin.set_fact:
@@ -99,13 +103,12 @@
     # If firezone_oidc_dir changes to a path whose basename differs from "firezone", update this key.
     firezone_oidc_resolved_api_url: >-
       http://{{ firezone_oidc_container_info.container.NetworkSettings.Networks['firezone_firezone-network'].IPAddress }}:13000
-  when:
-    - firezone_oidc_api_url is not defined
+  when: (firezone_oidc_api_url | default(none)) is none
 
 - name: Set API URL from explicit override
   ansible.builtin.set_fact:
     firezone_oidc_resolved_api_url: "{{ firezone_oidc_api_url }}"
-  when: firezone_oidc_api_url is defined
+  when: (firezone_oidc_api_url | default(none)) is not none
 
 # --- Preflight: verify API reachable ---
 
@@ -174,8 +177,7 @@
                 | default(firezone_oidc_server_url + '/auth/oidc/' + item.key + '/callback', true),
               'response_type': item.value.response_type | default('code', true),
               'scope': item.value.scope | default('openid email profile', true),
-              'auto_create_users': item.value.auto_create_users
-                if item.value.auto_create_users is not none else true
+              'auto_create_users': item.value.auto_create_users | default(true, true)
             }
           ] }}
       loop: "{{ firezone_oidc_providers | dict2items }}"
