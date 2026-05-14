@@ -4,12 +4,20 @@
 # Contract sha256: f00cbaca0e532932b1e72b7951e7a795da6feefbb0d949857f82bed3ada0ea14
 
 variable "arguments" {
-  description = "Typed payload from argument_specs.yml. All fields optional with defaults."
+  description = <<-EOT
+    Typed payload mirroring provision.options in argument_specs.yml.
+
+    Fields declared `required: true` (no `default:`) in argument_specs are
+    required at the Terraform layer too — `tofu plan` fails fast if the
+    caller omits them. Fields with a `default:` are rendered as
+    `optional(<type>, <default>)`. All other fields are
+    `optional(<type>)` and arrive as null when omitted (the role must
+    handle null explicitly).
+  EOT
   type = object({
     docker_daemon_config = optional(any, {})
     reboot_on_change = optional(bool, true)
   })
-  default = {}
 }
 
 variable "host_name" {

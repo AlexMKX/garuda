@@ -4,11 +4,20 @@
 # Contract sha256: d47bd8e85bd63cdee38301381e52ce5d840421856e5b09dc3447757e1f732aad
 
 variable "arguments" {
-  description = "Typed payload from argument_specs.yml. All fields optional with defaults."
+  description = <<-EOT
+    Typed payload mirroring provision.options in argument_specs.yml.
+
+    Fields declared `required: true` (no `default:`) in argument_specs are
+    required at the Terraform layer too — `tofu plan` fails fast if the
+    caller omits them. Fields with a `default:` are rendered as
+    `optional(<type>, <default>)`. All other fields are
+    `optional(<type>)` and arrive as null when omitted (the role must
+    handle null explicitly).
+  EOT
   type = object({
-    ipt_server_dir = optional(string)
-    ipt_server_image = optional(string)
-    ipt_powerdns_image = optional(string)
+    ipt_server_dir = string
+    ipt_server_image = string
+    ipt_powerdns_image = string
     ipt_interfaces = optional(list(string), [])
     ipt_routes = optional(list(object({ route = list(object({ gw = optional(string), dev = optional(string) })), rules = list(string) })), [])
     ipt_nic_attach = optional(list(string), [])
@@ -18,7 +27,6 @@ variable "arguments" {
     ipt_pinning_egress = optional(map(any), {})
     ipt_pinning_ttl = optional(number, 86400)
   })
-  default = {}
 }
 
 variable "host_name" {

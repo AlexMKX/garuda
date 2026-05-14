@@ -4,13 +4,21 @@
 # Contract sha256: c94467188cd8564d03936a6ac5e30e55260d471602102b456edc843fd2447700
 
 variable "arguments" {
-  description = "Typed payload from argument_specs.yml. All fields optional with defaults."
+  description = <<-EOT
+    Typed payload mirroring provision.options in argument_specs.yml.
+
+    Fields declared `required: true` (no `default:`) in argument_specs are
+    required at the Terraform layer too — `tofu plan` fails fast if the
+    caller omits them. Fields with a `default:` are rendered as
+    `optional(<type>, <default>)`. All other fields are
+    `optional(<type>)` and arrive as null when omitted (the role must
+    handle null explicitly).
+  EOT
   type = object({
-    backbone_dir = optional(string)
-    backbone_subnet = optional(string)
-    border_subnet = optional(string)
+    backbone_dir = string
+    backbone_subnet = string
+    border_subnet = string
   })
-  default = {}
 }
 
 variable "host_name" {

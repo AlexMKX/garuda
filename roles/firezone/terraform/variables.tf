@@ -4,11 +4,20 @@
 # Contract sha256: b196e12f639fccc3a665713d8948f3221e78536cf49dcc96e980ffc006d3949e
 
 variable "arguments" {
-  description = "Typed payload from argument_specs.yml. All fields optional with defaults."
+  description = <<-EOT
+    Typed payload mirroring provision.options in argument_specs.yml.
+
+    Fields declared `required: true` (no `default:`) in argument_specs are
+    required at the Terraform layer too — `tofu plan` fails fast if the
+    caller omits them. Fields with a `default:` are rendered as
+    `optional(<type>, <default>)`. All other fields are
+    `optional(<type>)` and arrive as null when omitted (the role must
+    handle null explicitly).
+  EOT
   type = object({
-    fz_firezone_dir = optional(string)
-    fz_firezone_image = optional(string)
-    firezone_main_compose_file = optional(string)
+    fz_firezone_dir = string
+    fz_firezone_image = string
+    firezone_main_compose_file = string
     fz_admin_password = optional(string)
     fz_admin = optional(string, "fz-admin@localhost")
     fz_client_subnet = optional(string, "10.11.0.0/24")
@@ -20,7 +29,6 @@ variable "arguments" {
     fz_masquerade = optional(bool, false)
     firezone_labels = optional(map(any), {})
   })
-  default = {}
 }
 
 variable "host_name" {

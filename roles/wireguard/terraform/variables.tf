@@ -4,17 +4,26 @@
 # Contract sha256: 55d29349c895cc301d94b146fe0d4b72c6e94c03d8e9d023631ffad961552083
 
 variable "arguments" {
-  description = "Typed payload from argument_specs.yml. All fields optional with defaults."
+  description = <<-EOT
+    Typed payload mirroring provision.options in argument_specs.yml.
+
+    Fields declared `required: true` (no `default:`) in argument_specs are
+    required at the Terraform layer too — `tofu plan` fails fast if the
+    caller omits them. Fields with a `default:` are rendered as
+    `optional(<type>, <default>)`. All other fields are
+    `optional(<type>)` and arrive as null when omitted (the role must
+    handle null explicitly).
+  EOT
   type = object({
     wireguard_tunnel_name = optional(string)
-    wireguard_interface_name = optional(string)
-    wireguard_address = optional(string)
-    wireguard_private_key = optional(string)
-    wireguard_table = optional(any)
+    wireguard_interface_name = string
+    wireguard_address = string
+    wireguard_private_key = string
+    wireguard_table = any
     wireguard_listen_port = optional(number)
     wireguard_public_endpoint = optional(string)
-    wireguard_peer_public_key = optional(string)
-    wireguard_peer_address = optional(string)
+    wireguard_peer_public_key = string
+    wireguard_peer_address = string
     wireguard_peer_endpoint_host = optional(string)
     wireguard_peer_listen_port = optional(number)
     wireguard_peer_preshared_key = optional(string)
@@ -25,10 +34,9 @@ variable "arguments" {
     wireguard_labels = optional(map(any), {})
     wireguard_nic_attach = optional(list(string), [])
     wireguard_mesh_root = optional(string, "/opt/garuda/wg_tunnels")
-    wireguard_image = optional(string)
+    wireguard_image = string
     wireguard_ops_root = optional(string, "/opt/garuda/ops")
   })
-  default = {}
 }
 
 variable "host_name" {
