@@ -1,0 +1,61 @@
+---
+# k3s validation Z2G (Zero-to-Green) smoke.
+# Bootstraps inventory from `tofu output -json ansible_smoke_inventory`
+# of a validation root (modules/k3s_cloud_init/tests/{yc,gcp}), then runs
+# phases 1..4 against each host in group `k3s_validation`.
+#
+# Invocation:
+#   ansible-playbook modules/k3s_cloud_init/tests/smoke/k3s_z2g.yml \
+#     -e z2g_terraform_dir=modules/k3s_cloud_init/tests/yc
+#
+# Targeted phases:
+#   --tags phase_1
+#
+# Multiple roots in one run: invoke twice, once per root. The playbook
+# is idempotent and read-only on the VMs.
+
+- name: "Phase 0 — bootstrap inventory from terraform output"
+  hosts: localhost
+  gather_facts: false
+  tags: [always]
+  tasks:
+    - name: "Fetch ansible_smoke_inventory from terraform"
+      ansible.builtin.command:
+        cmd: "{{ tf_cli | default('tofu') }} output -json ansible_smoke_inventory"
+        chdir: "{{ z2g_terraform_dir }}"
+      register: _tf_out
+      changed_when: false
+
+    - name: "Materialize a static inventory file"
+      vars:
+        _hosts: "{{ _tf_out.stdout | from_json }}"
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/.k3s_z2g_inventory"
+        mode: "0600"
+        content: |
+          [k3s_validation]
+          {% for name, h in _hosts.items() %}
+          {{ name }} ansible_host={{ h.ansible_host }} ansible_user={{ h.ansible_user }} ansible_ssh_private_key_file={{ playbook_dir }}/.k3s_z2g_{{ name }}.key
+          {% endfor %}
+
+    - name: "Materialize per-host SSH private keys"
+      vars:
+        _hosts: "{{ _tf_out.stdout | from_json }}"
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/.k3s_z2g_{{ item.key }}.key"
+        mode: "0600"
+        content: "{{ item.value.ansible_ssh_private_key }}"
+      loop: "{{ _hosts | dict2items }}"
+      no_log: true
+
+    - name: "Reload inventory"
+      ansible.builtin.meta: refresh_inventory
+
+- name: "Phases 1..4 — k3s liveness, bind, node readiness, pod health"
+  hosts: k3s_validation
+  gather_facts: false
+  tasks:
+    - ansible.builtin.import_tasks: tasks/phase_1_wait_k3s_active.yml
+    - ansible.builtin.import_tasks: tasks/phase_2_api_bind_check.yml
+    - ansible.builtin.import_tasks: tasks/phase_3_node_ready.yml
+    - ansible.builtin.import_tasks: tasks/phase_4_no_failing_pods.yml

@@ -1,0 +1,16 @@
+env_slug = "k3s-validation-yc"
+
+yc = {
+  cloud_id          = "REPLACE_WITH_CLOUD_ID"
+  folder_id         = "REPLACE_WITH_FOLDER_ID"
+  zone              = "ru-central1-d"
+  network_id        = "REPLACE_WITH_NETWORK_ID"
+  primary_subnet_id = "REPLACE_WITH_SUBNET_ID"
+}
+
+ssh_keys = [
+  # "operator:ssh-ed25519 AAAA... operator@workstation",
+]
+
+disk_size_gb = 20
+k3s_version  = null # null = stable channel

@@ -1,0 +1,28 @@
+---
+- name: "Phase 3 — kubectl get nodes -o json"
+  ansible.builtin.command: >-
+    kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get nodes -o json
+  register: nodes_json
+  changed_when: false
+  become: true
+  tags: [phase_3]
+
+- name: "Phase 3 — parse nodes JSON"
+  ansible.builtin.set_fact:
+    _nodes: "{{ (nodes_json.stdout | from_json)['items'] }}"
+  tags: [phase_3]
+
+- name: "Phase 3 — assert exactly one Ready node"
+  ansible.builtin.assert:
+    that:
+      - _nodes | length == 1
+      - >-
+        (_nodes[0].status.conditions
+          | selectattr('type','equalto','Ready')
+          | list | first).status == "True"
+    fail_msg: |
+      Expected exactly one Ready node.
+      Node count: {{ _nodes | length }}
+      Conditions: {{ _nodes[0].status.conditions | default([]) | to_json }}
+    success_msg: "Exactly one Ready node as expected."
+  tags: [phase_3]

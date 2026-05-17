@@ -25,15 +25,35 @@ locals {
     ["${var.ssh_user}:${trimspace(tls_private_key.admin.public_key_openssh)}"],
   ))
 
-  # Data disk effective presence
-  data_disk_enabled = var.data_disk_size_gb > 0 || var.existing_data_disk_id != null
-  data_disk_id      = var.existing_data_disk_id != null ? var.existing_data_disk_id : (
-    var.data_disk_size_gb > 0 ? yandex_compute_disk.data[0].id : null
-  )
+  # Disk mount cloud-config rendering. Empty string when attached_disks is
+  # empty; the cloudinit_config data source then skips this part entirely.
+  _disk_by_id_prefix = "/dev/disk/by-id/virtio"
 
-  cloud_init = templatefile("${path.module}/templates/cloud-init.yaml.tftpl", {
-    data_disk_enabled = local.data_disk_enabled
+  _mount_cloud_config = length(var.attached_disks) == 0 ? "" : yamlencode({
+    fs_setup = [for d in var.attached_disks : {
+      device     = "${local._disk_by_id_prefix}-${d.device_name}"
+      filesystem = coalesce(d.fs_type, "ext4")
+      label      = d.device_name
+      overwrite  = false
+    }]
+    mounts = [for d in var.attached_disks : [
+      "${local._disk_by_id_prefix}-${d.device_name}",
+      d.mount_path,
+      coalesce(d.fs_type, "ext4"),
+      "defaults,nofail",
+      "0",
+      "2",
+    ]]
+    runcmd = concat(
+      [for d in var.attached_disks : "mkdir -p ${d.mount_path}"],
+      ["mount -a"],
+    )
   })
+
+  _auto_user_data_part = length(var.attached_disks) == 0 ? "" : "#cloud-config\n${local._mount_cloud_config}"
+
+  # Whether to instantiate the cloudinit_config data source at all.
+  needs_cloud_init = length(var.attached_disks) > 0 || length(var.user_data_parts) > 0
 
   # Firewall / SG
   sg_enabled = var.default_ingress || length(var.ingress_ports) > 0
@@ -65,10 +85,8 @@ locals {
   oslogin_metadata = var.oslogin_enabled ? { "enable-oslogin" = "true" } : {}
 
   managed_metadata = merge(
-    {
-      "ssh-keys"  = local.ssh_keys_metadata
-      "user-data" = local.cloud_init
-    },
+    { "ssh-keys" = local.ssh_keys_metadata },
+    local.needs_cloud_init ? { "user-data" = data.cloudinit_config.this[0].rendered } : {},
     local.oslogin_metadata,
   )
   effective_metadata = merge(local.managed_metadata, var.metadata)

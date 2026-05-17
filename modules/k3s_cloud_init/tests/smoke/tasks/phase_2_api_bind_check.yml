@@ -1,0 +1,19 @@
+---
+- name: "Phase 2 — read ss output for sport :6443"
+  ansible.builtin.command: ss -tlnp 'sport = :6443'
+  register: ss_out
+  changed_when: false
+  become: true
+  tags: [phase_2]
+
+- name: "Phase 2 — assert k3s API binds strictly to 127.0.0.1:6443"
+  ansible.builtin.assert:
+    that:
+      - "'127.0.0.1:6443' in ss_out.stdout"
+      - "'0.0.0.0:6443' not in ss_out.stdout"
+    fail_msg: |
+      k3s API must bind strictly to 127.0.0.1:6443.
+      ss output:
+      {{ ss_out.stdout }}
+    success_msg: "k3s API bound to 127.0.0.1:6443 as expected."
+  tags: [phase_2]

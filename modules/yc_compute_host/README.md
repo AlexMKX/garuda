@@ -3,7 +3,8 @@
 Provisions a Linux VM in Yandex Cloud with:
 - Auto-generated keypair for a module-managed deploy user (default `garuda`)
 - Operator/extra ssh keys passed verbatim through metadata
-- Optional data disk (new or attach existing)
+- Optional caller-owned disks attached via `attached_disks` (caller creates
+  `yandex_compute_disk`; module attaches, formats on first boot, mounts)
 - Optional security group with SSH/HTTP/HTTPS/ICMP/UDP-all ingress
 
 ## SSH key management
@@ -71,13 +72,13 @@ the OS Login profile's login as the SSH user.
 | `cores` / `memory_gb`     | `2` / `4`                        | vCPU count / RAM (GiB).                                                |
 | `nat`                     | `true`                           | Allocate public IPv4 via 1:1 NAT.                                      |
 | `ssh_user`                | `"garuda"`                       | Module-managed deploy user; auto-generated keypair binds to it.        |
-| `ssh_keys`                | `[]`                             | List of raw `user:public_key` lines for metadata['ssh-keys'].          |
+| `ssh_keys`                | _(required)_                     | List of raw `user:public_key` lines for metadata['ssh-keys']. Pass `[]` to opt into "generated admin key only" mode. Format-validated; rejects malformed entries; `null` is not allowed (`nullable = false`). |
 | `oslogin_enabled`         | `false`                          | Opt-in. When `true`, sets `metadata["enable-oslogin"]="true"` and the guest agent abandons `metadata["ssh-keys"]` in favour of OS Login profiles. Requires org-level OS Login + per-user profile + `compute.osLogin` role. |
-| `data_disk_size_gb`       | `0`                              | When > 0, create a new ext4 data disk and mount at `/opt/garuda`.      |
-| `existing_data_disk_id`   | `null`                           | Attach an existing disk by id instead of creating a new one.           |
+| `attached_disks`          | `[]`                             | Caller-owned disks to attach and mount. Each entry: `{ disk_id, device_name, mount_path, fs_type }`. The module never creates disks. See "With attached disks" below. |
 | `default_ingress`         | `true`                           | Create module-managed SG (SSH/HTTP/HTTPS/ICMP/UDP-all from 0.0.0.0/0). |
 | `ingress_ports`           | `[]`                             | Additional ingress rules merged into the module-managed SG.            |
 | `metadata`                | `{}`                             | Caller-supplied metadata; merges over module-managed `ssh-keys` and `user-data`. |
+| `user_data_parts`         | `[]`                             | Additional cloud-config documents (each starting with `#cloud-config`) merged after the module's data-disk bootstrap. See "Extending cloud-init" below. |
 | `labels`                  | `{}`                             | Instance labels.                                                       |
 
 ## Outputs
@@ -89,7 +90,6 @@ the OS Login profile's login as the SSH user.
 | `private_ipv4`      | Primary NIC private IP.                                                  |
 | `fqdn` / `hostname` | YC-assigned FQDN / configured Linux hostname.                            |
 | `instance_id`       | YC compute instance id.                                                  |
-| `data_disk_id`      | Effective data disk id (new or attached existing); null when no disk.    |
 
 ## Examples
 
@@ -121,28 +121,50 @@ module "vm" {
   subnet_id  = data.yandex_vpc_subnet.primary.id
 
   ssh_keys = [
-    "alex:ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... alex@laptop",
+    "operator:ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI... operator@workstation",
   ]
 }
 ```
 
-`alex` is created by the guest agent on first boot; its `~alex/.ssh/authorized_keys`
+`operator` is created by the guest agent on first boot; its `~operator/.ssh/authorized_keys`
 contains the operator key. `garuda` (Terraform-managed) coexists in `~garuda/.ssh/authorized_keys`.
 
-### With data disk
+### With attached disks
 
 ```hcl
-module "vm" {
-  source            = "../yc_compute_host"
-  name              = "stateful"
-  subnet_id         = data.yandex_vpc_subnet.primary.id
-  data_disk_size_gb = 50  # creates new ext4 at /opt/garuda
+resource "yandex_compute_disk" "host_data" {
+  name = "${var.env_slug}-host-data"
+  zone = var.zone
+  size = 50
+  type = "network-ssd"
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
-# To reattach an existing disk after VM recreate:
-# data_disk_size_gb = 0
-# existing_data_disk_id = "fv4..."
+module "vm" {
+  source    = "../yc_compute_host"
+  name      = "stateful"
+  env_slug  = var.env_slug
+  subnet_id = data.yandex_vpc_subnet.primary.id
+  ssh_keys  = []
+
+  attached_disks = [
+    {
+      disk_id     = yandex_compute_disk.host_data.id
+      device_name = "host-data"
+      mount_path  = "/var/lib/host-data"
+    },
+  ]
+}
 ```
+
+`device_name` surfaces inside the guest as `/dev/disk/by-id/virtio-host-data`.
+The compute-host module renders a `00-attached-disks.yaml` cloud-config part
+that runs `fs_setup` with `overwrite: false`, writes an `/etc/fstab` entry
+with `nofail`, and runs `mkdir -p` plus `mount -a` on first boot. On
+instance recreate (same disk, new VM) the existing filesystem is preserved.
 
 ## Hostname & FQDN
 
@@ -154,21 +176,125 @@ garuda stacks (e.g. `prod` and `staging`) to coexist with the
 same role (e.g. `hub`) inside one VPC.
 
 `hostname` is a forces-replacement attribute: changing `env_slug` or
-`name` on an existing instance recreates it. Pre-create the data disk
-(see `existing_data_disk_id`) if you need disk persistence across
-recreates.
+`name` on an existing instance recreates it. Persist state across
+recreates by creating `yandex_compute_disk` resources in the caller
+(with `prevent_destroy`) and passing them through `attached_disks`.
 
-## Migration from previous contract (alex user, cloud-init users block)
+## Extending cloud-init
+
+The module renders `metadata["user-data"]` as a multipart MIME bundle via the
+`hashicorp/cloudinit` provider. Part ordering:
+
+1. **Attached-disk bootstrap** (filename `00-attached-disks.yaml`) — only
+   rendered when `attached_disks` is non-empty. Runs `fs_setup`,
+   appends `/etc/fstab` entries with `nofail`, and runs
+   `mkdir -p <mount_path>` plus `mount -a` for every entry.
+2. **Caller parts** (filenames `10-user-0.yaml`, `11-user-1.yaml`, …) —
+   each element of `var.user_data_parts` in declared order.
+
+Cloud-init applies parts alphabetically by filename, so the numeric prefix
+guarantees the bootstrap runs before any caller part on the VM.
+
+Merge type: `list(append)+dict(no_replace,recurse_list)+str(append)`. Caller
+`runcmd` lists are appended to the bootstrap; callers cannot overwrite the
+module's `fs_setup`/`mounts`.
+
+When neither the bootstrap nor `user_data_parts` is needed, the
+`metadata["user-data"]` key is absent from the instance (rather than
+empty).
+
+### Example: k3s install
+
+```hcl
+module "vm" {
+  source    = "../yc_compute_host"
+  name      = "edge"
+  env_slug  = "example-prod"
+  subnet_id = data.yandex_vpc_subnet.primary.id
+  ssh_keys  = ["operator:${file("~/.ssh/id_ed25519.pub")}"]
+
+  user_data_parts = [
+    "#cloud-config\n${yamlencode({
+      packages = ["curl", "ca-certificates"]
+      runcmd   = ["curl -sfL https://example.net/k3s-install | sh -"]
+    })}",
+  ]
+}
+```
+
+`yamlencode` emits a bare YAML document without the `#cloud-config`
+header that cloud-init requires. Prepend the header explicitly when
+building inline as shown above.
+
+## Extending cloud-init
+
+The module renders `metadata["user-data"]` as a multipart MIME bundle via the
+`hashicorp/cloudinit` provider. Part ordering:
+
+1. **Bootstrap** (filename `00-bootstrap-data-disk.yaml`) — only rendered
+   when `data_disk_size_gb > 0` or `existing_data_disk_id != null`. Mounts
+   the data disk at `/opt/garuda` with `fs_setup.overwrite: false`.
+2. **Caller parts** (filenames `10-user-0.yaml`, `11-user-1.yaml`, …) —
+   each element of `var.user_data_parts` in declared order.
+
+Cloud-init applies parts alphabetically by filename, so the numeric prefix
+guarantees the bootstrap runs before any caller part on the VM.
+
+Merge type: `list(append)+dict(no_replace,recurse_list)+str(append)`. Caller
+`runcmd` lists are appended to the bootstrap; callers cannot overwrite the
+module's `fs_setup`/`mounts`.
+
+When neither the bootstrap nor `user_data_parts` is needed, the
+`metadata["user-data"]` key is absent from the instance (rather than
+empty).
+
+### Example: k3s install
+
+```hcl
+module "vm" {
+  source    = "../yc_compute_host"
+  name      = "edge"
+  env_slug  = "example-prod"
+  subnet_id = data.yandex_vpc_subnet.primary.id
+  ssh_keys  = ["operator:${file("~/.ssh/id_ed25519.pub")}"]
+
+  user_data_parts = [
+    "#cloud-config\n${yamlencode({
+      packages = ["curl", "ca-certificates"]
+      runcmd   = ["curl -sfL https://example.net/k3s-install | sh -"]
+    })}",
+  ]
+}
+```
+
+`yamlencode` emits a bare YAML document without the `#cloud-config`
+header that cloud-init requires. Prepend the header explicitly when
+building inline as shown above.
+
+## Migration from previous contract (operator user, cloud-init users block)
 
 VMs created on the old contract migrate as follows:
 
 1. `terragrunt apply` updates metadata. **Image family change** (`ubuntu-2404-lts` → `ubuntu-2404-lts-oslogin`) triggers boot disk replacement.
-2. Preserve data with `existing_data_disk_id`. Set `data_disk_size_gb = 0` and pass the existing disk id.
-3. After apply, new VM comes up with `garuda` (Terraform-managed) plus any users from `var.ssh_keys`. The old `alex` user is gone with the boot disk.
+2. Preserve data by pre-creating a `yandex_compute_disk` in the caller (with `prevent_destroy`) and passing it through `attached_disks`.
+3. After apply, new VM comes up with `garuda` (Terraform-managed) plus any users from `var.ssh_keys`. The old `operator` user is gone with the boot disk.
 4. Ansible inventory naturally picks up `connection_data.user = "garuda"`. Workload playbooks run as `garuda`.
 
 For interactive operator access, add an entry to `var.ssh_keys`:
 
 ```hcl
-ssh_keys = ["alex:${file("~/.ssh/id_ed25519.pub")}"]
+ssh_keys = ["operator:${file("~/.ssh/id_ed25519.pub")}"]
 ```
+
+### Migration from the old `data_disk_size_gb` / `existing_data_disk_id`
+
+This release removes both variables. Pick the path that matches the previous caller setup:
+
+- **Previously `data_disk_size_gb > 0` (module owned the disk).** Run
+  `terraform state mv 'module.<name>.yandex_compute_disk.data[0]' <caller_disk_address>` before `terragrunt apply`. The `[0]` index is required — the historic resource was declared with `count = 1`. After the move the disk lives in caller TF state without recreation; then pass it via `attached_disks`.
+- **Previously `existing_data_disk_id` (caller already owned the disk).** Stop passing `existing_data_disk_id`. Declare or reference the disk on the caller side and pass its id via `attached_disks`. No `state mv` is needed — the disk was never in the module's state.
+- **Disposable stacks.** Drop the old variable, declare a fresh `yandex_compute_disk`, and apply. The old disk is destroyed; data is lost.
+
+In all paths, set `device_name = "garuda-data"` and `mount_path = "/opt/garuda"` to keep compatibility with workload roles (firezone_oidc, ipt_server, backbone_network) that default to subpaths under `/opt/garuda`.
+
+Production stacks should declare `lifecycle { prevent_destroy = true }` on the caller-owned `yandex_compute_disk` so an accidental `terragrunt destroy` cannot wipe the persistent data; only disposable test stacks (like `examples/mini-site/`) should leave it at `false`.

@@ -14,5 +14,9 @@ terraform {
       source  = "hashicorp/local"
       version = ">= 2.5.0"
     }
+    cloudinit = {
+      source  = "hashicorp/cloudinit"
+      version = "~> 2.3"
+    }
   }
 }

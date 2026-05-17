@@ -1,0 +1,28 @@
+---
+- name: "Phase 4 — kubectl get pods -A -o json"
+  ansible.builtin.command: >-
+    kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml get pods -A -o json
+  register: pods_json
+  changed_when: false
+  become: true
+  tags: [phase_4]
+
+- name: "Phase 4 — assert no pods stuck in non-Running phase"
+  ansible.builtin.assert:
+    that:
+      - >-
+        (pods_json.stdout | from_json)['items']
+          | rejectattr('status.phase','equalto','Running')
+          | rejectattr('status.phase','equalto','Succeeded')
+          | list | length == 0
+    fail_msg: |
+      Found pods not in Running/Succeeded phase.
+      Pods:
+      {{
+        (pods_json.stdout | from_json)['items']
+          | rejectattr('status.phase','equalto','Running')
+          | rejectattr('status.phase','equalto','Succeeded')
+          | map(attribute='metadata.name') | list
+      }}
+    success_msg: "All pods Running or Succeeded."
+  tags: [phase_4]

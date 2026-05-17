@@ -69,22 +69,6 @@ output "ssh_private_key_openssh" {
   sensitive   = true
 }
 
-output "data_disk" {
-  description = "Summary of the data disk when configured; null otherwise."
-  value = local.data_disk_enabled ? {
-    id      = local.data_disk_id
-    is_new  = var.data_disk_size_gb > 0
-    size_gb = var.data_disk_size_gb > 0 ? yandex_compute_disk.data[0].size : null
-    fs      = "ext4"
-    mount   = "/opt/garuda"
-  } : null
-}
-
-output "data_disk_id" {
-  description = "Id of the effective data disk (new or attached existing); null when no disk."
-  value       = local.data_disk_enabled ? local.data_disk_id : null
-}
-
 output "connection_data" {
   description = "Ansible/Terraform-friendly connection bundle for this host. Matches the connection_data variable type used by Linux workload modules. instance_token = yandex_compute_instance.id, used downstream as an opaque substrate-generation discriminator that forces ansible re-apply on VM recreate."
   sensitive   = true
@@ -111,7 +95,13 @@ output "test_ssh_keys_metadata" {
 }
 
 output "test_cloud_init_user_data" {
-  description = "Internal: rendered cloud-init user-data YAML. Testing use only."
+  description = <<-EOT
+    Internal: rendered cloud-init user-data MIME bundle. Testing use only.
+    Returns null when no cloud-init payload is needed (no data disk and
+    user_data_parts is empty). Otherwise: plaintext multipart MIME
+    (gzip=false, base64_encode=false in the cloudinit_config data source)
+    matching what the VM receives via metadata['user-data'].
+  EOT
   sensitive   = true
-  value       = local.cloud_init
+  value       = local.needs_cloud_init ? data.cloudinit_config.this[0].rendered : null
 }

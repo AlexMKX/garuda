@@ -7,6 +7,31 @@ data "yandex_vpc_subnet" "primary" {
   subnet_id = var.yc.primary_subnet_id
 }
 
+# Caller-owned data disk for the hub. Lifecycle is decoupled from the VM:
+# recreating the VM module does not touch this resource.
+resource "yandex_compute_disk" "hub_data" {
+  count = var.hub.existing_disk_id == null ? 1 : 0
+
+  name = "${var.env_slug}-hub-data"
+  zone = var.yc.zone
+  type = "network-ssd"
+  size = var.hub.data_disk_gb
+
+  labels = {
+    garuda_role    = "hub"
+    garuda_managed = "terraform"
+    garuda_env     = var.env_slug
+  }
+
+  lifecycle {
+    prevent_destroy = false # mini-site is disposable; production stacks should set true
+  }
+}
+
+locals {
+  hub_disk_id = var.hub.existing_disk_id != null ? var.hub.existing_disk_id : yandex_compute_disk.hub_data[0].id
+}
+
 module "yc_hub" {
   source = "./modules/yc_compute_host"
 
@@ -20,9 +45,13 @@ module "yc_hub" {
   memory_gb         = var.hub.memory_gb
   boot_disk_size_gb = var.hub.boot_disk_gb
 
-  # data_disk: create new by default; attach existing if explicitly requested.
-  data_disk_size_gb     = var.hub.existing_disk_id == null ? var.hub.data_disk_gb : 0
-  existing_data_disk_id = var.hub.existing_disk_id
+  attached_disks = [
+    {
+      disk_id     = local.hub_disk_id
+      device_name = "garuda-data"
+      mount_path  = "/opt/garuda"
+    },
+  ]
 
   ssh_keys = var.operator_ssh_keys
 

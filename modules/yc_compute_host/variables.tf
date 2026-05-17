@@ -150,16 +150,30 @@ agent creates each user on first contact (passwordless sudoer with bash
 shell) and rewrites that user's ~/.ssh/authorized_keys whenever metadata
 changes — no reboot, no cloud-init users-groups, no startup script.
 
-Use this for operator-side keys (e.g. "alex:ssh-ed25519 AAAA... alex@laptop")
+Use this for operator-side keys (e.g. "operator:ssh-ed25519 AAAA... operator@workstation")
 or any additional automation account distinct from var.ssh_user.
+
+Pass [] explicitly if only the module-managed deploy user (var.ssh_user)
+should have SSH access. The variable has no default — callers must
+declare intent. null is not allowed.
 
 Format: "username:keytype keydata [comment]" — exactly what GCP/YC expect.
 The comment in the public key is informational only; the user prefix
-before the first colon is what determines which Linux user the key is
-written for.
+before the first colon determines which Linux user the key is written for.
 EOT
   type        = list(string)
-  default     = []
+  nullable    = false
+  # No default — required.
+
+  validation {
+    condition = alltrue([
+      for k in var.ssh_keys : can(regex(
+        "^[a-z_][a-z0-9_-]{0,31}:ssh-(rsa|ed25519|ecdsa-[a-z0-9-]+)\\s",
+        k,
+      ))
+    ])
+    error_message = "Each ssh_keys entry must match 'username:keytype keydata [comment]' format. Username: 1-32 chars matching POSIX (start with letter or _); keytype: ssh-rsa, ssh-ed25519, or ssh-ecdsa-*."
+  }
 }
 
 variable "oslogin_enabled" {
@@ -214,26 +228,103 @@ variable "ingress_ports" {
   default = []
 }
 
-variable "data_disk_size_gb" {
-  description = "When > 0, create a new persistent disk of this size, ext4, mounted at /opt/garuda."
-  type        = number
-  default     = 0
-}
+variable "attached_disks" {
+  description = <<EOT
+Disks that already exist (owned by the caller) to attach to this instance,
+format on first boot if empty, and mount at the given paths.
 
-variable "existing_data_disk_id" {
-  description = "Attach an existing disk by id instead of creating a new one."
-  type        = string
-  default     = null
-}
+The caller creates `yandex_compute_disk` resources independently and passes
+their IDs in. This module never creates or destroys disks.
 
-# The module will not accept both data_disk_size_gb > 0 and existing_data_disk_id.
-locals {
-  _data_disk_conflict = (var.data_disk_size_gb > 0) && (var.existing_data_disk_id != null)
-}
+Each entry has:
+  - disk_id:     YC disk resource id of the existing disk.
+  - device_name: caller-chosen stable identifier. Surfaces inside the guest
+                 as `/dev/disk/by-id/virtio-<device_name>`. The same
+                 `device_name` passed on instance recreate produces the same
+                 mount path, so /etc/fstab entries stay valid across
+                 instance lifetime.
+  - mount_path:  absolute path on the host to mount the filesystem at.
+  - fs_type:     "ext4" (default) or "xfs". On first boot (no existing FS)
+                 cloud-init runs `mkfs`. On subsequent boots cloud-init sees
+                 the existing FS and skips formatting.
 
-check "data_disk_mutually_exclusive" {
-  assert {
-    condition     = !local._data_disk_conflict
-    error_message = "data_disk_size_gb and existing_data_disk_id are mutually exclusive."
+Empty list (default) means no extra disks are attached.
+EOT
+  type = list(object({
+    disk_id     = string
+    device_name = string
+    mount_path  = string
+    fs_type     = optional(string, "ext4")
+  }))
+  default  = []
+  nullable = false
+
+  validation {
+    condition     = alltrue([for d in var.attached_disks : can(regex("^/", d.mount_path))])
+    error_message = "attached_disks[*].mount_path must be absolute paths."
+  }
+
+  validation {
+    condition     = alltrue([for d in var.attached_disks : d.mount_path != "/"])
+    error_message = "attached_disks[*].mount_path cannot be the root filesystem '/'."
+  }
+
+  validation {
+    condition     = length(distinct([for d in var.attached_disks : d.device_name])) == length(var.attached_disks)
+    error_message = "attached_disks[*].device_name must be unique within one instance."
+  }
+
+  validation {
+    condition     = length(distinct([for d in var.attached_disks : d.mount_path])) == length(var.attached_disks)
+    error_message = "attached_disks[*].mount_path must be unique within one instance."
+  }
+
+  validation {
+    condition     = alltrue([for d in var.attached_disks : contains(["ext4", "xfs"], coalesce(d.fs_type, "ext4"))])
+    error_message = "attached_disks[*].fs_type must be \"ext4\" or \"xfs\"."
+  }
+
+  validation {
+    condition     = alltrue([for d in var.attached_disks : can(regex("^[a-z0-9][a-z0-9-]*$", d.device_name))])
+    error_message = "attached_disks[*].device_name must be lower-case alphanumerics and hyphens, starting with an alnum."
+  }
+
+  validation {
+    condition     = alltrue([for d in var.attached_disks : length(d.device_name) <= 56])
+    error_message = "attached_disks[*].device_name must be 56 characters or less."
   }
 }
+
+variable "user_data_parts" {
+  description = <<EOT
+Additional cloud-config documents appended after the module's bootstrap
+part in the rendered multi-part MIME bundle written to
+metadata['user-data'].
+
+Each element must be a valid cloud-config YAML document starting with
+'#cloud-config'. Multiple parts are valid; they are applied by
+cloud-init in declared order via filename sort
+(00-attached-disks.yaml, 10-user-0.yaml, 11-user-1.yaml, ...).
+
+Cloud-init applies parts with merge_type
+'list(append)+dict(no_replace,recurse_list)+str(append)'. This means
+caller runcmd lists are appended to the bootstrap runcmd (bootstrap
+runs first), and a caller cannot accidentally overwrite a top-level
+key set by the bootstrap (e.g. fs_setup, mounts).
+
+SSH keys are NOT expected here. They flow through metadata['ssh-keys']
+via the ssh_keys variable and provider guest-agent integration; do
+not include users[].ssh_authorized_keys blocks in user_data_parts.
+EOT
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for p in var.user_data_parts : can(regex("^#cloud-config\\b", p))
+    ])
+    error_message = "Each user_data_parts element must start with '#cloud-config' header (cloud-init format identifier)."
+  }
+}
+
+

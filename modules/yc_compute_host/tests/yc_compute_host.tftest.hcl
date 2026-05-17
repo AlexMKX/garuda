@@ -7,6 +7,7 @@ variables {
   name      = "test_host"
   subnet_id = "test-subnet"
   env_slug  = "test-env"
+  ssh_keys  = []
 }
 
 run "contract_env_slug_required" {
@@ -33,43 +34,13 @@ run "contract_instance_name_uses_env_slug" {
   }
 }
 
-run "contract_no_data_disk_by_default" {
-  command = plan
-
-  assert {
-    condition     = length(yandex_compute_disk.data) == 0
-    error_message = "Data disk must not be created when data_disk_size_gb=0 and existing_data_disk_id=null"
-  }
-}
-
-run "contract_data_disk_size_gb_creates_new_disk" {
+run "contract_attached_disk_attaches_caller_disk_id" {
   command = plan
 
   variables {
-    data_disk_size_gb = 20
-  }
-
-  assert {
-    condition     = length(yandex_compute_disk.data) == 1
-    error_message = "Data disk resource must be created when data_disk_size_gb > 0"
-  }
-
-  assert {
-    condition     = yandex_compute_disk.data[0].size == 20
-    error_message = "Data disk size must match data_disk_size_gb"
-  }
-}
-
-run "contract_existing_data_disk_attaches_without_creating" {
-  command = plan
-
-  variables {
-    existing_data_disk_id = "existing-disk-id-42"
-  }
-
-  assert {
-    condition     = length(yandex_compute_disk.data) == 0
-    error_message = "No new data disk must be created when existing_data_disk_id is set"
+    attached_disks = [
+      { disk_id = "existing-disk-id-42", device_name = "data", mount_path = "/var/lib/data" }
+    ]
   }
 
   assert {
@@ -77,25 +48,27 @@ run "contract_existing_data_disk_attaches_without_creating" {
       for sd in yandex_compute_instance.this.secondary_disk :
       sd.disk_id == "existing-disk-id-42"
     ])
-    error_message = "Existing disk must be attached as secondary_disk by id"
+    error_message = "Caller disk must be attached as secondary_disk by id verbatim."
   }
 }
 
-run "contract_cloud_init_mounts_data_disk_at_opt_garuda" {
+run "contract_cloud_init_mounts_caller_disk_at_caller_path" {
   command = plan
 
   variables {
-    data_disk_size_gb = 5
+    attached_disks = [
+      { disk_id = "fake-id", device_name = "data", mount_path = "/var/lib/data" }
+    ]
   }
 
   assert {
-    condition     = can(regex("/opt/garuda", yandex_compute_instance.this.metadata["user-data"]))
-    error_message = "Mount path /opt/garuda must appear in rendered cloud-init user-data"
+    condition     = can(regex("/var/lib/data", yandex_compute_instance.this.metadata["user-data"]))
+    error_message = "Caller-supplied mount_path must appear in rendered cloud-init user-data"
   }
 
   assert {
-    condition     = can(regex("virtio-garuda-data", yandex_compute_instance.this.metadata["user-data"]))
-    error_message = "Stable /dev/disk/by-id/virtio-garuda-data path must appear in user-data"
+    condition     = can(regex("virtio-data", yandex_compute_instance.this.metadata["user-data"]))
+    error_message = "Stable /dev/disk/by-id/virtio-<device_name> path must appear in user-data"
   }
 }
 
@@ -244,7 +217,24 @@ run "contract_ssh_keys_passthrough_verbatim" {
 }
 
 run "contract_cloud_init_has_no_user_provisioning" {
-  command = apply
+  # plan (not apply): cloudinit_config is a data source, fully evaluated
+  # during plan, so output.test_cloud_init_user_data is materialized.
+  # Apply would also work but triggers prevent_destroy on the data disk
+  # at teardown — plan-only sidesteps that and is sufficient for content
+  # introspection.
+  command = plan
+
+  # Enable disk so the bootstrap cloud-init part is rendered; without it
+  # output.test_cloud_init_user_data is null (new contract from
+  # user-data-extension feature) and strcontains() would error on null.
+  # The assertions below check that the module's bootstrap part does NOT
+  # introduce user-provisioning artifacts — that property is meaningful
+  # only when the bootstrap is actually present.
+  variables {
+    attached_disks = [
+      { disk_id = "fake-id", device_name = "data", mount_path = "/var/lib/data" }
+    ]
+  }
 
   assert {
     condition     = !strcontains(output.test_cloud_init_user_data, "users:")
@@ -335,4 +325,216 @@ run "contract_user_metadata_can_override_enable_oslogin" {
     condition     = yandex_compute_instance.this.metadata["enable-oslogin"] == "false"
     error_message = "user-supplied metadata must win over module-managed enable-oslogin"
   }
+}
+
+# NOTE: there is no runtime test for "ssh_keys is required".
+# In Terraform/OpenTofu, required-ness is a structural property of the
+# variable declaration (no default, `nullable = false`) enforced by the
+# language at plan/apply time. The error emitted is "No value for required
+# variable" / "required variable may not be set to null" — these are
+# variable-layer diagnostics, not check/validation/precondition failures,
+# so they are NOT catchable via `expect_failures = [var.ssh_keys]`.
+#
+# Required-ness is therefore audited via:
+#   - source inspection (no `default` keyword in the variable block;
+#     `nullable = false` set)
+#   - the validation runs below that exercise non-null, non-default
+#     inputs and prove the variable is exposed and validated.
+#
+# See spec section "ssh_keys required (no default)" and the rationale
+# table in the design doc.
+
+run "contract_ssh_keys_accepts_empty_list" {
+  command = apply
+
+  variables {
+    ssh_keys = []
+  }
+
+  assert {
+    condition     = can(regex("garuda:ssh-ed25519 ", output.test_ssh_keys_metadata))
+    error_message = "Empty ssh_keys must still produce the module-managed garuda admin key in metadata."
+  }
+}
+
+run "contract_ssh_keys_validation_rejects_malformed" {
+  command = plan
+
+  variables {
+    ssh_keys = ["not-a-valid-entry"]
+  }
+
+  expect_failures = [var.ssh_keys]
+}
+
+run "contract_ssh_keys_validation_rejects_bad_username" {
+  command = plan
+
+  variables {
+    ssh_keys = ["1invalid:ssh-ed25519 AAAAtestkey 1invalid@host"]
+  }
+
+  expect_failures = [var.ssh_keys]
+}
+
+run "contract_ssh_keys_validation_rejects_bad_keytype" {
+  command = plan
+
+  variables {
+    ssh_keys = ["alice:ssh-dsa AAAAtestkey alice@host"]
+  }
+
+  expect_failures = [var.ssh_keys]
+}
+
+run "user_data_parts_default_empty_no_user_data_metadata" {
+  command = plan
+
+  variables {
+    ssh_keys = []
+    # attached_disks default []; user_data_parts default []
+  }
+
+  assert {
+    condition     = output.test_cloud_init_user_data == null
+    error_message = "With no disk and no user_data_parts, test_cloud_init_user_data must be null (metadata['user-data'] key absent)."
+  }
+}
+
+run "user_data_parts_default_with_disk_renders_auto_part_only" {
+  command = plan
+
+  variables {
+    ssh_keys = []
+    attached_disks = [
+      { disk_id = "fake-id", device_name = "data", mount_path = "/var/lib/data" }
+    ]
+  }
+
+  assert {
+    condition     = output.test_cloud_init_user_data != null
+    error_message = "Disk enabled must produce a cloud-init bundle."
+  }
+
+  assert {
+    condition     = strcontains(output.test_cloud_init_user_data, "data")
+    error_message = "Auto-injected disk part must include the caller device_name label."
+  }
+
+  assert {
+    condition     = strcontains(output.test_cloud_init_user_data, "virtio-data")
+    error_message = "Auto-injected disk part must reference /dev/disk/by-id/virtio-data."
+  }
+
+  assert {
+    condition     = strcontains(output.test_cloud_init_user_data, "00-attached-disks.yaml")
+    error_message = "Module-managed disk part must use filename prefix '00-attached-disks.yaml'."
+  }
+}
+
+run "user_data_parts_appended_to_bundle" {
+  command = plan
+
+  variables {
+    ssh_keys = []
+    attached_disks = [
+      { disk_id = "fake-id", device_name = "data", mount_path = "/var/lib/data" }
+    ]
+    user_data_parts = [
+      <<-EOT
+        #cloud-config
+        runcmd:
+          - echo "hello from user part zero"
+      EOT
+    ]
+  }
+
+  assert {
+    condition     = strcontains(output.test_cloud_init_user_data, "00-attached-disks.yaml")
+    error_message = "Bootstrap filename '00-attached-disks.yaml' must be present."
+  }
+
+  assert {
+    condition     = strcontains(output.test_cloud_init_user_data, "10-user-0.yaml")
+    error_message = "First user part must use filename prefix '10-user-0.yaml'."
+  }
+
+  assert {
+    condition     = strcontains(output.test_cloud_init_user_data, "hello from user part zero")
+    error_message = "User part content must pass through verbatim."
+  }
+
+  assert {
+    condition     = strcontains(output.test_cloud_init_user_data, "mount -a")
+    error_message = "Bootstrap runcmd 'mount -a' must still appear."
+  }
+}
+
+run "user_data_parts_multiple_parts_filename_indices" {
+  command = plan
+
+  variables {
+    ssh_keys = []
+    user_data_parts = [
+      "#cloud-config\nruncmd:\n  - echo FIRST",
+      "#cloud-config\nruncmd:\n  - echo SECOND",
+      "#cloud-config\nruncmd:\n  - echo THIRD",
+    ]
+  }
+
+  assert {
+    condition     = strcontains(output.test_cloud_init_user_data, "10-user-0.yaml")
+    error_message = "First user part must have filename '10-user-0.yaml'."
+  }
+
+  assert {
+    condition     = strcontains(output.test_cloud_init_user_data, "11-user-1.yaml")
+    error_message = "Second user part must have filename '11-user-1.yaml'."
+  }
+
+  assert {
+    condition     = strcontains(output.test_cloud_init_user_data, "12-user-2.yaml")
+    error_message = "Third user part must have filename '12-user-2.yaml'."
+  }
+
+  assert {
+    condition     = strcontains(output.test_cloud_init_user_data, "echo FIRST")
+    error_message = "User part 0 content must appear verbatim."
+  }
+
+  assert {
+    condition     = strcontains(output.test_cloud_init_user_data, "echo SECOND")
+    error_message = "User part 1 content must appear verbatim."
+  }
+
+  assert {
+    condition     = strcontains(output.test_cloud_init_user_data, "echo THIRD")
+    error_message = "User part 2 content must appear verbatim."
+  }
+}
+
+run "user_data_parts_validation_rejects_missing_header" {
+  command = plan
+
+  variables {
+    ssh_keys = []
+    user_data_parts = [
+      "runcmd:\n  - echo no-header"
+    ]
+  }
+
+  expect_failures = [var.user_data_parts]
+}
+
+run "user_data_parts_validation_rejects_shellscript_header" {
+  command = plan
+
+  variables {
+    ssh_keys = []
+    user_data_parts = [
+      "#!/bin/bash\necho 'shell script not allowed'"
+    ]
+  }
+
+  expect_failures = [var.user_data_parts]
 }

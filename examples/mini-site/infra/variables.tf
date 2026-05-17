@@ -102,7 +102,7 @@ variable "operator_ssh_keys" {
   description = <<EOT
 Operator/extra SSH keys passed verbatim into metadata['ssh-keys'] on every
 managed VM. Each entry MUST be in `username:keytype keydata [comment]`
-format (e.g. `alex:ssh-ed25519 AAAA... alex@laptop`). The cloud guest
+format (e.g. `operator:ssh-ed25519 AAAA... operator@workstation`). The cloud guest
 agent on the VM creates the user on first contact and writes the key into
 that user's ~/.ssh/authorized_keys. See
 garuda-repo/modules/{yc,gcp}_compute_host/README.md for details.

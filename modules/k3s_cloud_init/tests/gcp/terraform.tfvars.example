@@ -1,0 +1,16 @@
+env_slug = "k3s-validation-gcp"
+
+gcp = {
+  project_id = "REPLACE_WITH_PROJECT_ID"
+  region     = "us-central1"
+  zone       = "us-central1-a"
+  network    = "default"
+  subnetwork = "default"
+}
+
+ssh_keys = [
+  # "operator:ssh-ed25519 AAAA... operator@workstation",
+]
+
+disk_size_gb = 20
+k3s_version  = null # null = stable channel

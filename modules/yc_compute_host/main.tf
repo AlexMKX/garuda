@@ -69,21 +69,6 @@ resource "yandex_vpc_security_group" "this" {
   }
 }
 
-resource "yandex_compute_disk" "data" {
-  count = var.data_disk_size_gb > 0 ? 1 : 0
-
-  name = "${local.instance_name}-garuda-data"
-  zone = var.zone
-  type = "network-ssd"
-  size = var.data_disk_size_gb
-
-  labels = var.labels
-
-  lifecycle {
-    prevent_destroy = true
-  }
-}
-
 resource "yandex_compute_instance" "this" {
   name        = local.instance_name
   hostname    = local.hostname
@@ -107,10 +92,10 @@ resource "yandex_compute_instance" "this" {
   }
 
   dynamic "secondary_disk" {
-    for_each = local.data_disk_enabled ? [1] : []
+    for_each = { for d in var.attached_disks : d.device_name => d }
     content {
-      disk_id     = local.data_disk_id
-      device_name = "garuda-data"
+      disk_id     = secondary_disk.value.disk_id
+      device_name = secondary_disk.key
       mode        = "READ_WRITE"
     }
   }

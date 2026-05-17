@@ -14,23 +14,6 @@ resource "google_compute_address" "this" {
   project = var.project_id
 }
 
-# Optional new persistent data disk
-resource "google_compute_disk" "data" {
-  count = var.data_disk_size_gb > 0 ? 1 : 0
-
-  name    = "${local.instance_name}-garuda-data"
-  project = var.project_id
-  zone    = var.zone
-  type    = "pd-balanced"
-  size    = var.data_disk_size_gb
-
-  labels = var.labels
-
-  lifecycle {
-    prevent_destroy = true
-  }
-}
-
 # Firewall (module-managed). Created only when default_ingress or
 # ingress_ports is non-empty.
 resource "google_compute_firewall" "this" {
@@ -52,7 +35,7 @@ resource "google_compute_firewall" "this" {
 }
 
 resource "google_compute_instance" "this" {
-  name         = local.instance_name
+  name = local.instance_name
   # GCP requires an FQDN (≥3 labels). The "c.<project>.internal" suffix
   # matches what GCE's auto-generated internal DNS zone uses for the
   # project, so this is a no-op for routing — just makes intent explicit
@@ -75,10 +58,10 @@ resource "google_compute_instance" "this" {
   }
 
   dynamic "attached_disk" {
-    for_each = local.data_disk_enabled ? [1] : []
+    for_each = { for d in var.attached_disks : d.device_name => d }
     content {
-      source      = local.data_disk_source
-      device_name = "garuda-data"
+      source      = attached_disk.value.disk_id
+      device_name = attached_disk.key
       mode        = "READ_WRITE"
     }
   }

@@ -1,0 +1,24 @@
+---
+- name: "Phase 1 — wait for k3s.service to be active"
+  ansible.builtin.command: systemctl is-active k3s
+  register: k3s_active
+  retries: 30
+  delay: 10
+  until: k3s_active.stdout == "active"
+  changed_when: false
+  failed_when: false
+  become: true
+  tags: [phase_1]
+
+- name: "Phase 1 — assert k3s active or fail with last status"
+  ansible.builtin.assert:
+    that:
+      - k3s_active.stdout == "active"
+    fail_msg: |
+      k3s.service did not become active within 5 minutes.
+      Last `systemctl is-active k3s` output: {{ k3s_active.stdout | default('') }}
+      Last exit code: {{ k3s_active.rc | default('?') }}
+      Likely causes: cloud-init installer failed (no network, get.k3s.io down)
+      or k3s crash-loops (bad flags, port 6443 conflict).
+    success_msg: "k3s.service is active."
+  tags: [phase_1]

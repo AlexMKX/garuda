@@ -49,7 +49,7 @@ hub = {
   memory_gb        = 4
   boot_disk_gb     = 20
   data_disk_gb     = 20
-  existing_disk_id = null  # null = create new data disk; set to existing disk ID to reuse
+  existing_disk_id = null  # null = create a new caller-owned data disk; set to an existing YC disk ID to reuse without recreating it.
 }
 
 hub_fqdn_prefix = "hub"
