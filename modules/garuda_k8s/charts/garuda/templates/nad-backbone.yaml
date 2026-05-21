@@ -1,0 +1,22 @@
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: backbone
+  namespace: {{ .Values.namespace | quote }}
+  labels:
+    {{- include "garuda.labels" . | nindent 4 }}
+spec:
+  config: |
+    {
+      "cniVersion": "0.4.0",
+      "name": "backbone",
+      "type": "bridge",
+      "bridge": "backbone",
+      "isGateway": false,
+      "ipMasq": false,
+      "ipam": {
+        "type": "whereabouts",
+        "configuration_path": "/var/lib/rancher/k3s/agent/etc/cni/net.d/whereabouts.d/whereabouts.conf",
+        "range": {{ .Values.backboneSubnet | quote }}
+      }
+    }

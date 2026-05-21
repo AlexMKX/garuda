@@ -69,8 +69,9 @@
   become: true
   register: _ipt_reach_pt
   changed_when: false
-  # rc 7 = connection refused (host is up, no HTTP), rc 0 = success; both prove reachability
-  failed_when: _ipt_reach_pt.rc not in [0, 7]
+  # rc 7 = connection refused (host is up, no HTTP), rc 22 = HTTP
+  # non-2xx from a reachable k3s edge listener, rc 0 = success.
+  failed_when: _ipt_reach_pt.rc not in [0, 7, 22]
 
 # Real ingress simulation: ask RouterOS to ping pt public IP. RouterOS uses
 # its OSPF-learned default route, which exits over the wg-hub-ros tunnel and

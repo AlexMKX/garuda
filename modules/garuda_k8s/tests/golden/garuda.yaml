@@ -1,0 +1,97 @@
+---
+# Source: garuda/templates/configmap-network-meta.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: garuda-network-meta
+  namespace: "garuda"
+  labels:
+    app.kubernetes.io/name: garuda
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: g
+    garuda.managed-by: helm
+data:
+  backbone_subnet: "10.42.0.0/24"
+  border_subnet: "10.43.0.0/24"
+  chart_version: "0.2.2"
+
+---
+# Source: garuda/templates/nad-backbone.yaml
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: backbone
+  namespace: "garuda"
+  labels:
+    app.kubernetes.io/name: garuda
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: g
+    garuda.managed-by: helm
+spec:
+  config: |
+    {
+      "cniVersion": "0.4.0",
+      "name": "backbone",
+      "type": "bridge",
+      "bridge": "backbone",
+      "isGateway": false,
+      "ipMasq": false,
+      "ipam": {
+        "type": "whereabouts",
+        "configuration_path": "/var/lib/rancher/k3s/agent/etc/cni/net.d/whereabouts.d/whereabouts.conf",
+        "range": "10.42.0.0/24"
+      }
+    }
+
+---
+# Source: garuda/templates/nad-border.yaml
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: border
+  namespace: "garuda"
+  labels:
+    app.kubernetes.io/name: garuda
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/instance: g
+    garuda.managed-by: helm
+spec:
+  # The `border` interface is the public-egress stepping stone for
+  # workloads that need to reach the internet (wg-pt, wg-de on the
+  # hub; wg-de, wg-pt on each edge under phase 2). The Compose hub
+  # stack achieves this with a docker bridge named `border` plus a
+  # host-side iptables MASQUERADE rule on eth0. The k3s edge variant
+  # asks the CNI `bridge` plugin to do both jobs itself by setting:
+  #
+  #   * isGateway=true — the host side of the bridge gets an IP from
+  #     borderSubnet (the .1 anchor by convention), so pods can use
+  #     that address as their next-hop default if needed.
+  #   * ipMasq=true — the bridge plugin installs an iptables MASQUERADE
+  #     rule against borderSubnet so that traffic leaving the pod via
+  #     `border` is SNAT'd onto the edge VM's primary NIC and routes
+  #     out to the internet.
+  #
+  # Without these two flags the bridge is a dead-end L2 segment and
+  # client traffic delivered to the edge wg pod through the WG tunnel
+  # gets masqueraded back into a routing loop / dropped.
+  #
+  # `backbone` deliberately stays isGateway=false, ipMasq=false:
+  # backbone carries internal mesh traffic only, source IPs must be
+  # preserved end-to-end for identity-aware features like the pinning
+  # portal (see modules/garuda_k8s/charts/garuda/templates/nad-backbone.yaml).
+  config: |
+    {
+      "cniVersion": "0.4.0",
+      "name": "border",
+      "type": "bridge",
+      "bridge": "border",
+      "isGateway": true,
+      "ipMasq": true,
+      "ipam": {
+        "type": "whereabouts",
+        "configuration_path": "/var/lib/rancher/k3s/agent/etc/cni/net.d/whereabouts.d/whereabouts.conf",
+        "gateway": "10.43.0.1",
+        "range_start": "10.43.0.2",
+        "range": "10.43.0.0/24"
+      }
+    }

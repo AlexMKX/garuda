@@ -105,6 +105,17 @@
           community.docker.docker_compose_v2:
             project_src: "{{ _wg_de_compose_path }}"
             state: absent
+          when: de_inventory_host not in groups.get('k3s_hosts', [])
+
+        - name: Stop wg-de on de k3s edge (simulate primary transit failure)
+          delegate_to: "{{ de_inventory_host }}"
+          become: true
+          ansible.builtin.command:
+            cmd: >-
+              kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml
+              -n garuda scale deployment/wg-de --replicas=0
+          changed_when: true
+          when: de_inventory_host in groups.get('k3s_hosts', [])
 
         - name: Wait for OSPF dead interval + ipt_routes monitor tick to converge
           ansible.builtin.pause:
@@ -165,6 +176,27 @@
           community.docker.docker_compose_v2:
             project_src: "{{ _wg_de_compose_path }}"
             state: present
+          when: de_inventory_host not in groups.get('k3s_hosts', [])
+
+        - name: Restart wg-de on de k3s edge (always, even on failure)
+          delegate_to: "{{ de_inventory_host }}"
+          become: true
+          ansible.builtin.command:
+            cmd: >-
+              kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml
+              -n garuda scale deployment/wg-de --replicas=1
+          changed_when: true
+          when: de_inventory_host in groups.get('k3s_hosts', [])
+
+        - name: Wait for wg-de k3s rollout after restart
+          delegate_to: "{{ de_inventory_host }}"
+          become: true
+          ansible.builtin.command:
+            cmd: >-
+              kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml
+              -n garuda rollout status deployment/wg-de --timeout=180s
+          changed_when: false
+          when: de_inventory_host in groups.get('k3s_hosts', [])
 
         - name: Wait for OSPF re-convergence + monitor tick
           ansible.builtin.pause:

@@ -15,23 +15,6 @@ module "linux_host_prerequisites_hub" {
   connection_data = var.connection_data_hub
 }
 
-module "linux_host_prerequisites_edges" {
-  for_each = var.edges
-
-  source = "../../../roles/linux_host_prerequisites/terraform"
-
-  host_name = local.host_names[each.key]
-  arguments = {
-    docker_daemon_config = {
-      "log-driver" = "json-file"
-      "log-opts"   = { "max-file" = "5", "max-size" = "100m" }
-      "ip-forward" = true
-    }
-  }
-
-  connection_data = var.connection_data_edges[each.key]
-}
-
 # --- Backbone network: hub (single) ---
 
 module "backbone_hub" {
@@ -47,25 +30,6 @@ module "backbone_hub" {
   }
 
   connection_data = var.connection_data_hub
-}
-
-# --- Backbone networks: edges (for_each) ---
-
-module "backbone_edges" {
-  for_each = var.edges
-
-  source = "../../../roles/backbone_network/terraform"
-
-  depends_on = [module.linux_host_prerequisites_edges]
-
-  host_name = local.host_names[each.key]
-  arguments = {
-    backbone_dir    = "/opt/garuda/backbone"
-    backbone_subnet = var.backbone_subnet
-    border_subnet   = var.border_subnet
-  }
-
-  connection_data = var.connection_data_edges[each.key]
 }
 
 # --- WireGuard tunnel key-pairs (one tunnel object per edge) ---
@@ -90,6 +54,47 @@ module "wireguard_tunnel" {
       endpoint_host = var.cloudflare_edges[each.key].record_name
     }
   }
+}
+
+# --- Kubernetes namespace and CNI bootstrap: edges ---
+# One instance per var.edges entry. Provider references resolve
+# through helm.edge[each.key] / kubernetes.edge[each.key] — the
+# matching for_each provider instances defined in providers.tf.
+
+module "garuda_k8s" {
+  for_each = var.edges
+  source   = "./modules/garuda_k8s"
+
+  providers = {
+    helm       = helm.edge[each.key]
+    kubernetes = kubernetes.edge[each.key]
+  }
+
+  namespace       = "garuda"
+  backbone_subnet = var.backbone_subnet
+  border_subnet   = var.border_subnet
+}
+
+# --- WireGuard Kubernetes workloads: edge side (one deployment per edge) ---
+
+module "wireguard_kube" {
+  for_each = var.edges
+  source   = "./modules/wireguard/kube"
+
+  providers = {
+    helm       = helm.edge[each.key]
+    kubernetes = kubernetes.edge[each.key]
+  }
+
+  namespace       = module.garuda_k8s[each.key].namespace
+  name            = "wg-${each.key}"
+  config          = local.wireguard_kube_inputs[each.key].config
+  peer            = local.wireguard_kube_inputs[each.key].peer
+  allowed_nets    = local.wireguard_kube_inputs[each.key].allowed_nets
+  nic_attach      = ["backbone", "border"]
+  wireguard_image = var.wireguard_image
+  frr_image       = var.frr_sidecar_image
+  ospf            = local.wireguard_kube_inputs[each.key].ospf
 }
 
 # --- WireGuard Linux modules: hub side (one per edge) ---
@@ -125,41 +130,6 @@ module "wireguard_linux_hub" {
   }
 
   connection_data = var.connection_data_hub
-}
-
-# --- WireGuard Linux modules: edge side (one per edge) ---
-
-module "wireguard_linux_edges" {
-  for_each = var.edges
-
-  source = "../../../roles/wireguard/terraform"
-
-  depends_on = [module.backbone_edges]
-
-  host_name = local.host_names[each.key]
-  arguments = {
-    wireguard_interface_name            = module.wireguard_tunnel[each.key].peers["edge"].kernel_ifname
-    wireguard_tunnel_name               = module.wireguard_tunnel[each.key].peers["edge"].tunnel_name
-    wireguard_address                   = module.wireguard_tunnel[each.key].peers["edge"].address
-    wireguard_private_key               = module.wireguard_tunnel[each.key].peers["edge"].private_key
-    wireguard_listen_port               = module.wireguard_tunnel[each.key].peers["edge"].listen_port
-    wireguard_public_endpoint           = module.wireguard_tunnel[each.key].peers["edge"].endpoint_host
-    wireguard_peer_public_key           = module.wireguard_tunnel[each.key].peers["core"].public_key
-    wireguard_peer_address              = module.wireguard_tunnel[each.key].peers["core"].address
-    wireguard_peer_endpoint_host        = module.wireguard_tunnel[each.key].peers["core"].endpoint_host
-    wireguard_peer_listen_port          = module.wireguard_tunnel[each.key].peers["core"].listen_port
-    wireguard_peer_preshared_key        = module.wireguard_tunnel[each.key].peers["core"].preshared_key
-    wireguard_peer_persistent_keepalive = 25
-    wireguard_table                     = "off"
-    wireguard_allowed_nets              = ["0.0.0.0/0", "224.0.0.0/4"]
-    wireguard_labels                    = merge(local.tunnel_facts[each.key].labels.edge, { "garuda.operator-scope" = "backbone_network" })
-    wireguard_nic_attach                = ["backbone", "border"]
-    wireguard_image                     = var.wireguard_image
-    wireguard_post_up                   = null
-    wireguard_pre_down                  = null
-  }
-
-  connection_data = var.connection_data_edges[each.key]
 }
 
 # --- WireGuard tunnel key-pair for hub-ros (RouterOS <-> hub) ---
@@ -212,10 +182,10 @@ module "wireguard_linux_hub_ros" {
     # requires the backbone_network attachment) and creates an FRR
     # sidecar. Without this attachment, RouterOS has no OSPF peer on
     # the hub side and no adjacency forms.
-    wireguard_nic_attach                = ["backbone"]
-    wireguard_image                     = var.wireguard_image
-    wireguard_post_up                   = null
-    wireguard_pre_down                  = null
+    wireguard_nic_attach = ["backbone"]
+    wireguard_image      = var.wireguard_image
+    wireguard_post_up    = null
+    wireguard_pre_down   = null
   }
 
   connection_data = var.connection_data_hub

@@ -1,0 +1,6 @@
+apiVersion: v2
+name: wireguard
+description: "Garuda WireGuard pod with optional FRR sidecar in the same network namespace."
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

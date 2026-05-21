@@ -1,0 +1,26 @@
+namespace: garuda
+name: ""
+config:
+  kernel_ifname: ""
+  private_key: ""
+  address: ""
+  subnet: ""
+  listen_port: null
+  endpoint_host: null
+peer:
+  public_key: ""
+  endpoint_host: ""
+  endpoint_listen_port: 51820
+  preshared_key: ""
+  address: ""
+allowed_nets: []
+table: "off"
+persistent_keepalive: 25
+nic_attach:
+  - backbone
+  - border
+images:
+  wireguard: ""
+  frr: ""
+# ospf is null when omitted; FRR sidecar is then NOT rendered.
+ospf: null

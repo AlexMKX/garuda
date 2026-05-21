@@ -1,0 +1,729 @@
+---
+# Source: garuda-cni/templates/multus-daemonset.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: multus
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/managed-by: Helm
+    garuda.managed-by: helm
+---
+# Source: garuda-cni/templates/whereabouts-daemonset.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: whereabouts
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/managed-by: Helm
+    garuda.managed-by: helm
+---
+# Source: garuda-cni/templates/multus-daemonset.yaml
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: multus-daemon-config
+  namespace: kube-system
+  labels:
+    tier: node
+    app: multus
+    app.kubernetes.io/managed-by: Helm
+    garuda.managed-by: helm
+data:
+  daemon-config.json: |
+    {
+        "chrootDir": "/hostroot",
+        "confDir": "/host/etc/cni/net.d",
+        "logLevel": "verbose",
+        "socketDir": "/host/run/multus/",
+        "cniVersion": "0.3.1",
+        "binDir": "/var/lib/rancher/k3s/data/cni",
+        "cniConfigDir": "/host/etc/cni/net.d",
+        "multusConfigFile": "auto",
+        "multusAutoconfigDir": "/host/etc/cni/net.d"
+    }
+---
+# Source: garuda-cni/templates/whereabouts-daemonset.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: whereabouts-config
+  namespace: kube-system
+  annotations:
+    kubernetes.io/description: |
+      Configmap containing user customizable cronjob schedule
+  labels:
+    app.kubernetes.io/managed-by: Helm
+    garuda.managed-by: helm
+data:
+  cron-expression: "30 4 * * *" # Default schedule is once per day at 4:30am. Users may configure this value to their liking.
+---
+# Source: garuda-cni/templates/multus-daemonset.yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: network-attachment-definitions.k8s.cni.cncf.io
+  labels:
+    app.kubernetes.io/managed-by: Helm
+    garuda.managed-by: helm
+spec:
+  group: k8s.cni.cncf.io
+  scope: Namespaced
+  names:
+    plural: network-attachment-definitions
+    singular: network-attachment-definition
+    kind: NetworkAttachmentDefinition
+    shortNames:
+      - net-attach-def
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          description: 'NetworkAttachmentDefinition is a CRD schema specified by the Network Plumbing
+            Working Group to express the intent for attaching pods to one or more logical or physical
+            networks. More information available at: https://github.com/k8snetworkplumbingwg/multi-net-spec'
+          type: object
+          properties:
+            apiVersion:
+              description: 'APIVersion defines the versioned schema of this represen
+                tation of an object. Servers should convert recognized schemas to the
+                latest internal value, and may reject unrecognized values. More info:
+                https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+              type: string
+            kind:
+              description: 'Kind is a string value representing the REST resource this
+                object represents. Servers may infer this from the endpoint the client
+                submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+              type: string
+            metadata:
+              type: object
+            spec:
+              description: 'NetworkAttachmentDefinition spec defines the desired state of a network attachment'
+              type: object
+              properties:
+                config:
+                  description: 'NetworkAttachmentDefinition config is a JSON-formatted CNI configuration'
+                  type: string
+---
+# Source: garuda-cni/templates/whereabouts-daemonset.yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+  creationTimestamp: null
+  name: ippools.whereabouts.cni.cncf.io
+  labels:
+    app.kubernetes.io/managed-by: Helm
+    garuda.managed-by: helm
+spec:
+  group: whereabouts.cni.cncf.io
+  names:
+    kind: IPPool
+    listKind: IPPoolList
+    plural: ippools
+    singular: ippool
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: IPPool is the Schema for the ippools API
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: IPPoolSpec defines the desired state of IPPool
+            properties:
+              allocations:
+                additionalProperties:
+                  description: IPAllocation represents metadata about the pod/container
+                    owner of a specific IP
+                  properties:
+                    id:
+                      type: string
+                    ifname:
+                      type: string
+                    podref:
+                      type: string
+                  required:
+                  - id
+                  - podref
+                  type: object
+                description: Allocations is the set of allocated IPs for the given
+                  range. Its` indices are a direct mapping to the IP with the same
+                  index/offset for the pool's range.
+                type: object
+              range:
+                description: Range is a RFC 4632/4291-style string that represents
+                  an IP address and prefix length in CIDR notation
+                type: string
+            required:
+            - allocations
+            - range
+            type: object
+        type: object
+    served: true
+    storage: true
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: []
+  storedVersions: []
+---
+# Source: garuda-cni/templates/whereabouts-daemonset.yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+  creationTimestamp: null
+  name: overlappingrangeipreservations.whereabouts.cni.cncf.io
+  labels:
+    app.kubernetes.io/managed-by: Helm
+    garuda.managed-by: helm
+spec:
+  group: whereabouts.cni.cncf.io
+  names:
+    kind: OverlappingRangeIPReservation
+    listKind: OverlappingRangeIPReservationList
+    plural: overlappingrangeipreservations
+    singular: overlappingrangeipreservation
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: OverlappingRangeIPReservation is the Schema for the OverlappingRangeIPReservations
+          API
+        properties:
+          apiVersion:
+            description: 'APIVersion defines the versioned schema of this representation
+              of an object. Servers should convert recognized schemas to the latest
+              internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+            type: string
+          kind:
+            description: 'Kind is a string value representing the REST resource this
+              object represents. Servers may infer this from the endpoint the client
+              submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: OverlappingRangeIPReservationSpec defines the desired state
+              of OverlappingRangeIPReservation
+            properties:
+              containerid:
+                type: string
+              ifname:
+                type: string
+              podref:
+                type: string
+            required:
+            - podref
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+status:
+  acceptedNames:
+    kind: ""
+    plural: ""
+  conditions: []
+  storedVersions: []
+---
+# Source: garuda-cni/templates/whereabouts-daemonset.yaml
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.14.0
+  name: nodeslicepools.whereabouts.cni.cncf.io
+  labels:
+    app.kubernetes.io/managed-by: Helm
+    garuda.managed-by: helm
+spec:
+  group: whereabouts.cni.cncf.io
+  names:
+    kind: NodeSlicePool
+    listKind: NodeSlicePoolList
+    plural: nodeslicepools
+    singular: nodeslicepool
+  scope: Namespaced
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: NodeSlicePool is the Schema for the nodesliceippools API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: Kind is a string value representing this object.
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: NodeSlicePoolSpec defines the desired state of NodeSlicePool
+            properties:
+              range:
+                description: Entire address range where each node gets a slice.
+                type: string
+              sliceSize:
+                description: Subnet size assigned to each node.
+                type: string
+            required:
+            - range
+            - sliceSize
+            type: object
+          status:
+            description: NodeSlicePoolStatus defines the observed state of NodeSlicePool
+            properties:
+              allocations:
+                description: Allocations holds node-to-slice assignments.
+                items:
+                  properties:
+                    nodeName:
+                      description: Node name assigned to this slice.
+                      type: string
+                    sliceRange:
+                      description: Subnet range for this slice.
+                      type: string
+                  required:
+                  - nodeName
+                  - sliceRange
+                  type: object
+                type: array
+            required:
+            - allocations
+            type: object
+        type: object
+    served: true
+    storage: true
+
+---
+# Source: garuda-cni/templates/multus-daemonset.yaml
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: multus
+  labels:
+    app.kubernetes.io/managed-by: Helm
+    garuda.managed-by: helm
+rules:
+  - apiGroups: ["k8s.cni.cncf.io"]
+    resources:
+      - '*'
+    verbs:
+      - '*'
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+      - pods/status
+    verbs:
+      - get
+      - update
+      # list/watch are required by Multus' thick-plugin pod-networks
+      # controller. Without them the controller logs
+      # `pods is forbidden: User \"system:serviceaccount:kube-system:multus\"
+      # cannot list resource \"pods\" in API group \"\" at the cluster scope`
+      # and Multus never reconciles `k8s.v1.cni.cncf.io/networks` pod
+      # annotations into actual secondary interfaces, so workload pods end
+      # up with only the primary CNI interface — backbone and border NADs
+      # are silently ignored.
+      - list
+      - watch
+  - apiGroups:
+      - ""
+      - events.k8s.io
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+      - update
+---
+# Source: garuda-cni/templates/whereabouts-daemonset.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: whereabouts-cni
+  labels:
+    app.kubernetes.io/managed-by: Helm
+    garuda.managed-by: helm
+rules:
+- apiGroups:
+  - whereabouts.cni.cncf.io
+  resources:
+  - ippools
+  - overlappingrangeipreservations
+  - nodeslicepools
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - '*'
+- apiGroups: [""]
+  resources:
+  - pods
+  verbs:
+  - list
+  - watch
+  - get
+- apiGroups: [""]
+  resources:
+  - nodes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups: ["k8s.cni.cncf.io"]
+  resources:
+    - network-attachment-definitions
+  verbs:
+    - get
+    - list
+    - watch
+- apiGroups:
+  - ""
+  - events.k8s.io
+  resources:
+    - events
+  verbs:
+  - create
+  - patch
+  - update
+  - get
+---
+# Source: garuda-cni/templates/multus-daemonset.yaml
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: multus
+  labels:
+    app.kubernetes.io/managed-by: Helm
+    garuda.managed-by: helm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: multus
+subjects:
+  - kind: ServiceAccount
+    name: multus
+    namespace: kube-system
+---
+# Source: garuda-cni/templates/whereabouts-daemonset.yaml
+kind: ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: whereabouts
+  labels:
+    app.kubernetes.io/managed-by: Helm
+    garuda.managed-by: helm
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: whereabouts-cni
+subjects:
+- kind: ServiceAccount
+  name: whereabouts
+  namespace: kube-system
+---
+# Source: garuda-cni/templates/multus-daemonset.yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kube-multus-ds
+  namespace: kube-system
+  labels:
+    tier: node
+    app: multus
+    name: multus
+    app.kubernetes.io/managed-by: Helm
+    garuda.managed-by: helm
+spec:
+  selector:
+    matchLabels:
+      name: multus
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        tier: node
+        app: multus
+        name: multus
+    spec:
+      hostNetwork: true
+      hostPID: true
+      tolerations:
+        - operator: Exists
+          effect: NoSchedule
+        - operator: Exists
+          effect: NoExecute
+      serviceAccountName: multus
+      containers:
+        - name: kube-multus
+          image: "rancher/hardened-multus-thick:v4.2.4-build20260310"
+          command: [ "/usr/src/multus-cni/bin/multus-daemon" ]
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "50Mi"
+            limits:
+              cpu: "100m"
+              memory: "50Mi"
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: cni
+              mountPath: /host/etc/cni/net.d
+            # The thick Multus daemon still resolves delegate plugin
+            # binaries under /opt/cni/bin. Back that path with k3s'
+            # fixed host CNI bin dir; do not create or sync host-side
+            # /opt/cni/bin.
+            - name: cnibin
+              mountPath: /opt/cni/bin
+            # k3s' fixed bin dir contains absolute symlinks into the
+            # release data tree. Mount that tree too so those symlink
+            # targets resolve inside the Multus daemon container.
+            - name: k3s-data
+              mountPath: /var/lib/rancher/k3s/data
+              readOnly: true
+            - name: host-run
+              mountPath: /host/run
+            - name: host-var-lib-cni-multus
+              mountPath: /var/lib/cni/multus
+            - name: host-var-lib-kubelet
+              mountPath: /var/lib/kubelet
+            - name: host-run-k8s-cni-cncf-io
+              mountPath: /run/k8s.cni.cncf.io
+            - name: host-run-netns
+              mountPath: /run/netns
+              mountPropagation: HostToContainer
+            - name: multus-daemon-config
+              mountPath: /etc/cni/net.d/multus.d
+              readOnly: true
+            - name: hostroot
+              mountPath: /hostroot
+              mountPropagation: HostToContainer
+            - mountPath: /etc/cni/multus/net.d
+              name: multus-conf-dir
+          env:
+            - name: MULTUS_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+      initContainers:
+        - name: install-multus-binary
+          image: "rancher/hardened-multus-thick:v4.2.4-build20260310"
+          command:
+            - "/install_multus"
+            - "-d"
+            - "/host/var/lib/rancher/k3s/data/cni"
+            - "-t"
+            - "thick"
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "15Mi"
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: cnibin
+              mountPath: /host/var/lib/rancher/k3s/data/cni
+              mountPropagation: Bidirectional
+      terminationGracePeriodSeconds: 10
+      volumes:
+        - name: cni
+          hostPath:
+            path: /var/lib/rancher/k3s/agent/etc/cni/net.d
+        - name: cnibin
+          hostPath:
+            path: /var/lib/rancher/k3s/data/cni
+        - name: k3s-data
+          hostPath:
+            path: /var/lib/rancher/k3s/data
+        - name: hostroot
+          hostPath:
+            path: /
+        - name: multus-daemon-config
+          configMap:
+            name: multus-daemon-config
+            items:
+            - key: daemon-config.json
+              path: daemon-config.json
+        - name: host-run
+          hostPath:
+            path: /run
+        - name: host-var-lib-cni-multus
+          hostPath:
+            path: /var/lib/cni/multus
+        - name: host-var-lib-kubelet
+          hostPath:
+            path: /var/lib/kubelet
+        - name: host-run-k8s-cni-cncf-io
+          hostPath:
+            path: /run/k8s.cni.cncf.io
+        - name: host-run-netns
+          hostPath:
+            path: /run/netns/
+        - name: multus-conf-dir
+          hostPath:
+            path: /var/lib/rancher/k3s/agent/etc/cni/multus/net.d
+
+---
+# Source: garuda-cni/templates/whereabouts-daemonset.yaml
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: whereabouts
+  namespace: kube-system
+  labels:
+    tier: node
+    app: whereabouts
+    app.kubernetes.io/managed-by: Helm
+    garuda.managed-by: helm
+spec:
+  selector:
+    matchLabels:
+      name: whereabouts
+  updateStrategy:
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        tier: node
+        app: whereabouts
+        name: whereabouts
+    spec:
+      hostNetwork: true
+      serviceAccountName: whereabouts
+      tolerations:
+      - operator: Exists
+        effect: NoSchedule
+      containers:
+      - name: whereabouts
+        command: [ "/bin/sh" ]
+        args:
+          - -c
+          - |
+            SLEEP=false source /install-cni.sh
+            /token-watcher.sh &
+            /ip-control-loop -log-level debug
+        image: "rancher/hardened-whereabouts:v0.9.3-build20260511"
+        env:
+        - name: NODENAME
+          valueFrom:
+            fieldRef:
+              apiVersion: v1
+              fieldPath: spec.nodeName
+        - name: WHEREABOUTS_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: CNI_CONF_DIR
+          value: /host/var/lib/rancher/k3s/agent/etc/cni/net.d
+        - name: CNI_BIN_DIR
+          value: /host/var/lib/rancher/k3s/data/cni
+        resources:
+          requests:
+            cpu: "100m"
+            memory: "100Mi"
+          limits:
+            cpu: "100m"
+            memory: "200Mi"
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: cnibin
+          mountPath: /host/var/lib/rancher/k3s/data/cni
+        - name: cni-net-dir
+          mountPath: /host/var/lib/rancher/k3s/agent/etc/cni/net.d
+        - name: cron-scheduler-configmap
+          mountPath: /cron-schedule
+      volumes:
+        - name: cnibin
+          hostPath:
+            path: /var/lib/rancher/k3s/data/cni
+        - name: cni-net-dir
+          hostPath:
+            path: /var/lib/rancher/k3s/agent/etc/cni/net.d
+        - name: cron-scheduler-configmap
+          configMap:
+            name: "whereabouts-config"
+            defaultMode: 0744
+            items:
+            - key: "cron-expression"
+              path: "config"
+---
+# Source: garuda-cni/templates/multus-daemonset.yaml
+# Adapted from k8snetworkplumbingwg/multus-cni v4.2.4:
+#   deployments/multus-daemonset-thick.yml
+# Only edits applied:
+#   * Outer ... gate (this file).
+#   * `app.kubernetes.io/managed-by` and `garuda.managed-by` labels added
+#     to each document's metadata.labels block.
+#   * k3s-native CNI paths from https://docs.k3s.io/networking/multus-ipams:
+#     confDir=/var/lib/rancher/k3s/agent/etc/cni/net.d and
+#     binDir=/var/lib/rancher/k3s/data/cni.
+#   * Rancher hardened Multus v4.2.4 image pinned from rke2-multus v4.2.413.
+# Re-vendoring procedure: see templates/multus/NOTES.md.
+#
+# Note:
+#   This deployment file is designed for 'quickstart' of multus, easy installation to test it,
+#   hence this deployment yaml does not care about following things intentionally.
+#     - various configuration options
+#     - minor deployment scenario
+#     - upgrade/update/uninstall scenario
+#   Multus team understand users deployment scenarios are diverse, hence we do not cover
+#   comprehensive deployment scenario. We expect that it is covered by each platform deployment.
+---
+# Source: garuda-cni/templates/whereabouts-daemonset.yaml
+# Adapted from k8snetworkplumbingwg/whereabouts v0.9.3:
+#   * doc/crds/daemonset-install.yaml
+#   * doc/crds/whereabouts.cni.cncf.io_ippools.yaml
+#   * doc/crds/whereabouts.cni.cncf.io_overlappingrangeipreservations.yaml
+#   * doc/crds/whereabouts.cni.cncf.io_nodeslicepools.yaml
+# Four upstream files are concatenated below in that order, separated by
+# YAML document markers. Only edits applied:
+#   * Outer ... gate (this file).
+#   * `app.kubernetes.io/managed-by` and `garuda.managed-by` labels added
+#     to each document's metadata.labels block.
+#   * k3s-native CNI paths from https://docs.k3s.io/networking/multus-ipams:
+#     confDir=/var/lib/rancher/k3s/agent/etc/cni/net.d and
+#     binDir=/var/lib/rancher/k3s/data/cni.
+#   * Rancher hardened Whereabouts v0.9.3 image pinned from rke2-multus
+#     v4.2.413.
+# Re-vendoring procedure: see templates/multus/NOTES.md.

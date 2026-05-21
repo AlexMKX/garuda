@@ -1,0 +1,7 @@
+# Default values for the garuda chart. The Terraform helm_release
+# in modules/garuda_k8s/main.tf overrides these.
+namespace: garuda
+backboneSubnet: ""
+borderSubnet: ""
+borderGateway: ""
+borderRangeStart: ""

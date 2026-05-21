@@ -16,7 +16,7 @@ locals {
     for k, e in var.edges : k => {
       subnet_cidr = "${cidrhost(e.hub_cidr, 0)}/${split("/", e.hub_cidr)[1]}"
       peers = {
-        hub  = { cidr = e.hub_cidr,  listen_port = e.listen_port }
+        hub  = { cidr = e.hub_cidr, listen_port = e.listen_port }
         edge = { cidr = e.peer_cidr, listen_port = e.listen_port }
       }
       labels = {
@@ -38,11 +38,41 @@ locals {
     }
   }
 
+  wireguard_kube_inputs = {
+    for k, e in var.edges : k => {
+      config = {
+        kernel_ifname = module.wireguard_tunnel[k].peers["edge"].kernel_ifname
+        private_key   = module.wireguard_tunnel[k].peers["edge"].private_key
+        address       = module.wireguard_tunnel[k].peers["edge"].address
+        subnet        = local.tunnel_facts[k].subnet_cidr
+        listen_port   = module.wireguard_tunnel[k].peers["edge"].listen_port
+        endpoint_host = module.wireguard_tunnel[k].peers["edge"].endpoint_host
+      }
+      peer = {
+        public_key           = module.wireguard_tunnel[k].peers["core"].public_key
+        endpoint_host        = module.wireguard_tunnel[k].peers["core"].endpoint_host
+        endpoint_listen_port = module.wireguard_tunnel[k].peers["core"].listen_port
+        preshared_key        = module.wireguard_tunnel[k].peers["core"].preshared_key
+        address              = module.wireguard_tunnel[k].peers["core"].address
+      }
+      allowed_nets = ["0.0.0.0/0", "224.0.0.0/4"]
+      ospf = {
+        router_id          = e.ospf_router_id_peer
+        area               = "0.0.0.0"
+        interfaces         = [module.wireguard_tunnel[k].peers["edge"].kernel_ifname]
+        passive_interfaces = []
+        default_originate  = true
+        redistribute       = []
+        extra_frr_conf     = ""
+      }
+    }
+  }
+
   # --- Hub-ros tunnel facts (RouterOS ↔ hub). ---
   hub_ros_facts = {
     subnet_cidr = "${cidrhost(var.hub_ros.hub_cidr, 0)}/${split("/", var.hub_ros.hub_cidr)[1]}"
     peers = {
-      hub      = { cidr = var.hub_ros.hub_cidr,      listen_port = var.hub_ros.listen_port }
+      hub      = { cidr = var.hub_ros.hub_cidr, listen_port = var.hub_ros.listen_port }
       routeros = { cidr = var.hub_ros.routeros_cidr, listen_port = var.hub_ros.listen_port }
     }
     labels = {
@@ -109,4 +139,21 @@ locals {
       ]
     },
   ]
+
+  # --- Edge kubeconfig + endpoint, decoded from garuda-tunnel state. ---
+  # See variable "tunnel_path" in variables.tf. The shape of the JSON is
+  # documented in
+  # https://github.com/AlexMKX/garuda-tunnel/blob/main/README.md
+  # under "Output reference".
+  tunnel = jsondecode(file(var.tunnel_path))
+
+  edges_kubeconfig = {
+    for k, conn in local.tunnel.connections :
+    k => yamldecode(base64decode(conn.fetch_files.kubeconfig.content_b64))
+  }
+
+  edges_endpoint = {
+    for k, conn in local.tunnel.connections :
+    k => "https://127.0.0.1:${conn.ports["k3s"]}"
+  }
 }

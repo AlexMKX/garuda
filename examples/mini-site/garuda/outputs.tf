@@ -3,9 +3,9 @@ output "workloads" {
   sensitive   = true
   value = concat(
     [module.backbone_hub],
-    [for k, m in module.backbone_edges : m],
     [for k, m in module.wireguard_linux_hub : m],
-    [for k, m in module.wireguard_linux_edges : m],
+    [for k, m in module.garuda_k8s : m],
+    [for k, m in module.wireguard_kube : m],
     [
       module.wireguard_linux_hub_ros,
       module.firezone,
@@ -39,7 +39,7 @@ output "ansible_smoke_inventory" {
         ansible_connection           = cd.connection
         ansible_network_os           = cd.network_os
         ansible_ssh_private_key_file = cd.ssh_private_key != null ? local_sensitive_file.ssh_key_edges[k].filename : null
-        groups                       = ["linux_hosts", "smoke_all"]
+        groups                       = ["linux_hosts", "k3s_hosts", "smoke_all"]
       }
     },
     {

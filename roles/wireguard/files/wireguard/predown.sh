@@ -2,8 +2,7 @@
 # WireGuard PreDown script — symmetric to postup.sh.
 #
 # Block 1 (always): tear down the nft table created by postup's Block 1.
-# Block 2 (border only): clean up the RPDB via_tunnel installed by
-# postup's Block 4.
+# Block 2 (border only): clean up the RPDB tables installed by postup.
 
 set -e
 
@@ -20,5 +19,7 @@ fi
 
 # --- Block 3: RPDB cleanup (border only) ---
 ip rule del pref 99 iif backbone lookup via_tunnel 2>/dev/null || true
+ip rule del pref 98 iif "$WG_INTERFACE" lookup border_egress 2>/dev/null || true
 ip route flush table via_tunnel 2>/dev/null || true
-echo "[PREDOWN] RPDB via_tunnel cleaned up"
+ip route flush table border_egress 2>/dev/null || true
+echo "[PREDOWN] RPDB via_tunnel and border_egress cleaned up"

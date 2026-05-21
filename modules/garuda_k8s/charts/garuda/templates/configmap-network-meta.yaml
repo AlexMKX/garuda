@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: garuda-network-meta
+  namespace: {{ .Values.namespace | quote }}
+  labels:
+    {{- include "garuda.labels" . | nindent 4 }}
+data:
+  backbone_subnet: {{ .Values.backboneSubnet | quote }}
+  border_subnet: {{ .Values.borderSubnet | quote }}
+  chart_version: {{ .Chart.Version | quote }}

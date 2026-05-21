@@ -1,0 +1,10 @@
+# Terragrunt drops a `.terragrunt-source-manifest` file in every copied
+# subdirectory when the consumer Terragrunt unit pulls this module via
+# its `terraform { source = "..." }` block. .helmignore is NOT honored
+# by the helm Terraform provider (it loads the chart from the source
+# path directly, bypassing `helm package`), so a Terragrunt-side hook
+# is still required to actually remove these. The pattern here documents
+# intent; the operational removal happens in
+# `vpn2/deploy/garuda/terragrunt.hcl` (before_hook
+# strip_terragrunt_manifests_from_charts).
+.terragrunt-source-manifest

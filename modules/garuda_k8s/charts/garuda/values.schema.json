@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["namespace", "backboneSubnet", "borderSubnet", "borderGateway", "borderRangeStart"],
+  "properties": {
+    "namespace": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+    },
+    "backboneSubnet": {
+      "type": "string",
+      "minLength": 9
+    },
+    "borderSubnet": {
+      "type": "string",
+      "minLength": 9
+    },
+    "borderGateway": {
+      "type": "string",
+      "minLength": 7
+    },
+    "borderRangeStart": {
+      "type": "string",
+      "minLength": 7
+    }
+  }
+}

@@ -1,14 +1,10 @@
 ---
-# Phase 3: container health on linux_hosts.
-# Uses community.docker.docker_container_info for precise state + healthcheck status.
+# Phase 3: workload health. Hub remains docker-compose; edges run k3s.
 - name: "§3 — select expected containers for {{ inventory_hostname }}"
   ansible.builtin.set_fact:
-    _expected_containers: >-
-      {{ z2g_expected_containers_hub if z2g_role == 'hub'
-         else (z2g_expected_containers_pt if z2g_role == 'pt'
-         else (z2g_expected_containers_de if z2g_role == 'de' else [])) }}
+    _expected_containers: "{{ z2g_expected_containers_hub if z2g_role == 'hub' else [] }}"
 
-- name: "§3 — inspect expected containers"
+- name: "§3 — inspect expected hub containers"
   community.docker.docker_container_info:
     name: "{{ item }}"
   become: true
@@ -16,9 +12,9 @@
   loop: "{{ _expected_containers }}"
   loop_control:
     label: "{{ item }}"
-  when: _expected_containers | length > 0
+  when: z2g_role == 'hub'
 
-- name: "§3 — assert each expected container is present and running/healthy"
+- name: "§3 — assert each expected hub container is present and running/healthy"
   ansible.builtin.assert:
     that:
       - item.exists | bool
@@ -34,8 +30,64 @@
     label: "{{ item.item }}"
   register: _container_assert_results
   ignore_errors: true
+  when: z2g_role == 'hub'
 
-- name: "§3 — fail if any container check failed"
+- name: "§3 — fail if any hub container check failed"
   ansible.builtin.fail:
     msg: "One or more container checks failed on {{ inventory_hostname }}"
-  when: _container_assert_results is defined and _container_assert_results.failed | default(false)
+  when: z2g_role == 'hub' and _container_assert_results is defined and _container_assert_results.failed | default(false)
+
+- name: "§3k — assert k3s service is active on edge"
+  ansible.builtin.command:
+    cmd: systemctl is-active k3s
+  become: true
+  changed_when: false
+  register: _k3s_active
+  when: z2g_role in ['pt', 'de']
+
+- name: "§3k — assert edge WireGuard deployment rolled out"
+  ansible.builtin.command:
+    cmd: >
+      kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml
+        -n garuda rollout status deployment/wg-{{ z2g_role }}
+        --timeout=300s
+  become: true
+  changed_when: false
+  register: _wg_rollout
+  when: z2g_role in ['pt', 'de']
+
+- name: "§3k — read edge WireGuard pod state"
+  ansible.builtin.command:
+    cmd: >
+      kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml
+        -n garuda get pods
+        -l app.kubernetes.io/instance=wg-{{ z2g_role }}
+        -o json
+  become: true
+  changed_when: false
+  register: _wg_pods
+  when: z2g_role in ['pt', 'de']
+
+- name: "§3k — assert edge WireGuard pod has wg and frr-sidecar running"
+  vars:
+    _pods: "{{ (_wg_pods.stdout | from_json).items }}"
+    _running_pods: >-
+      {{ _pods | selectattr('status.phase', 'equalto', 'Running') | list }}
+    _pod: "{{ _running_pods | first | default({}) }}"
+    _containers: "{{ _pod.status.containerStatuses | default([]) }}"
+    _running_names: >-
+      {{ _containers
+         | selectattr('state.running', 'defined')
+         | map(attribute='name')
+         | list }}
+  ansible.builtin.assert:
+    that:
+      - _running_pods | length >= 1
+      - "'wg' in _running_names"
+      - "'frr-sidecar' in _running_names"
+    fail_msg: >-
+      wg-{{ z2g_role }} has no Running pod with both wg and frr-sidecar
+      containers on {{ inventory_hostname }}. Pod count: {{ _pods | length }},
+      Running pods: {{ _running_pods | length }}, container names with
+      state.running: {{ _running_names }}.
+  when: z2g_role in ['pt', 'de']

@@ -1,35 +1,36 @@
 # Validates label wiring and OSPF router-id propagation.
 
 mock_provider "routeros" {}
-mock_provider "ansible" {}
 mock_provider "wireguard" {}
 mock_provider "local" {}
 mock_provider "tls" {}
 mock_provider "dns" {}
+mock_provider "helm" {}
+mock_provider "kubernetes" {}
 
 variables {
   env_slug = "mini-site"
 
   connection_data_hub = {
-    host = "192.0.2.1", user = "operator", connection = "ssh", network_os = "linux",
-    password = null, ssh_private_key_file = null, ssh_private_key = null,
+    host           = "192.0.2.1", user = "operator", connection = "ssh", network_os = "linux",
+    password       = null, ssh_private_key_file = null, ssh_private_key = null,
     instance_token = "mock-hub",
   }
 
   connection_data_edges = {
     pt = {
-      host = "192.0.2.2", user = "operator", connection = "ssh", network_os = "linux",
-      password = null, ssh_private_key_file = null, ssh_private_key = null,
+      host           = "192.0.2.2", user = "operator", connection = "ssh", network_os = "linux",
+      password       = null, ssh_private_key_file = null, ssh_private_key = null,
       instance_token = "mock-pt",
     }
     de = {
-      host = "192.0.2.3", user = "operator", connection = "ssh", network_os = "linux",
-      password = null, ssh_private_key_file = null, ssh_private_key = null,
+      host           = "192.0.2.3", user = "operator", connection = "ssh", network_os = "linux",
+      password       = null, ssh_private_key_file = null, ssh_private_key = null,
       instance_token = "mock-de",
     }
   }
 
-  cloudflare_hub   = { zone_id = "fixture-zone", record_name = "hub.example.net" }
+  cloudflare_hub = { zone_id = "fixture-zone", record_name = "hub.example.net" }
   cloudflare_edges = {
     pt = { zone_id = "fixture-zone", record_name = "pt.example.net" }
     de = { zone_id = "fixture-zone", record_name = "de.example.net" }
@@ -37,7 +38,7 @@ variables {
 
   routeros = {
     hostname = "routeros-example", management_host = "203.0.113.1",
-    user = "admin", uplink_interface = "ether1"
+    user     = "admin", uplink_interface = "ether1"
   }
   routeros_password    = "admin"
   routeros_lan_gateway = "203.0.113.1"

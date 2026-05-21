@@ -1,17 +1,9 @@
 ---
-# Phase 3.5b — verify host-level sysctl state is limited to what
-# linux_host_prerequisites writes, and legacy host-level sysctl
-# drop-ins from the earlier sysctl_settings era are absent (plan:
-# docs/superpowers/plans/2026-04-19-remove-host-level-sysctls.md).
-#
-# Runs on linux_hosts (hub, pt, de). Asserts:
-#  - /etc/sysctl.d/99-garuda-prerequisites.conf is absent (legacy name
-#    from before the role-scoped rename).
-#  - The only project-named sysctl drop-in under /etc/sysctl.d/ is
-#    99-garuda-linux_host_prerequisites.conf, which linux_host_prerequisites
-#    owns in order to persist net.ipv4.ip_forward=1 (Docker 29+ no longer
-#    sets the sysctl itself despite "ip-forward": true in daemon.json).
-#  - net.ipv4.ip_forward is 1.
+# Phase 3.5b — verify host-level sysctl state is clean on all Linux hosts.
+# Hub still receives linux_host_prerequisites; edges now receive k3s via
+# cloud-init. The legacy file checks apply to both runtimes. The ip_forward
+# assertion remains required because both Docker hub workloads and k3s edge
+# routing need host forwarding enabled.
 
 - name: "§3.5b — stat /etc/sysctl.d/99-garuda-prerequisites.conf"
   ansible.builtin.stat:
@@ -53,14 +45,14 @@
   register: _ip_forward
   changed_when: false
 
-- name: "§3.5b — assert ip_forward is 1 (Docker ip-forward:true in daemon.json)"
+- name: "§3.5b — assert ip_forward is 1"
   ansible.builtin.assert:
     that: _ip_forward.stdout | int == 1
     fail_msg: >-
       net.ipv4.ip_forward on {{ inventory_hostname }} is
-      {{ _ip_forward.stdout }}, expected 1. Docker daemon normally
-      enables this via ip-forward:true in daemon.json. Check
-      `systemctl status docker` and `cat /etc/docker/daemon.json`.
+      {{ _ip_forward.stdout }}, expected 1. Hub hosts get this from
+      linux_host_prerequisites; edge hosts get it from k3s/bootstrap.
+      Check `sysctl net.ipv4.ip_forward` and the host bootstrap logs.
 
 - name: "§3.5b — read net.ipv4.conf.all.rp_filter"
   ansible.builtin.command:

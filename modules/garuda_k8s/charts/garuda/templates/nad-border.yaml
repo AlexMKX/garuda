@@ -1,0 +1,47 @@
+apiVersion: k8s.cni.cncf.io/v1
+kind: NetworkAttachmentDefinition
+metadata:
+  name: border
+  namespace: {{ .Values.namespace | quote }}
+  labels:
+    {{- include "garuda.labels" . | nindent 4 }}
+spec:
+  # The `border` interface is the public-egress stepping stone for
+  # workloads that need to reach the internet (wg-pt, wg-de on the
+  # hub; wg-de, wg-pt on each edge under phase 2). The Compose hub
+  # stack achieves this with a docker bridge named `border` plus a
+  # host-side iptables MASQUERADE rule on eth0. The k3s edge variant
+  # asks the CNI `bridge` plugin to do both jobs itself by setting:
+  #
+  #   * isGateway=true — the host side of the bridge gets an IP from
+  #     borderSubnet (the .1 anchor by convention), so pods can use
+  #     that address as their next-hop default if needed.
+  #   * ipMasq=true — the bridge plugin installs an iptables MASQUERADE
+  #     rule against borderSubnet so that traffic leaving the pod via
+  #     `border` is SNAT'd onto the edge VM's primary NIC and routes
+  #     out to the internet.
+  #
+  # Without these two flags the bridge is a dead-end L2 segment and
+  # client traffic delivered to the edge wg pod through the WG tunnel
+  # gets masqueraded back into a routing loop / dropped.
+  #
+  # `backbone` deliberately stays isGateway=false, ipMasq=false:
+  # backbone carries internal mesh traffic only, source IPs must be
+  # preserved end-to-end for identity-aware features like the pinning
+  # portal (see modules/garuda_k8s/charts/garuda/templates/nad-backbone.yaml).
+  config: |
+    {
+      "cniVersion": "0.4.0",
+      "name": "border",
+      "type": "bridge",
+      "bridge": "border",
+      "isGateway": true,
+      "ipMasq": true,
+      "ipam": {
+        "type": "whereabouts",
+        "configuration_path": "/var/lib/rancher/k3s/agent/etc/cni/net.d/whereabouts.d/whereabouts.conf",
+        "gateway": {{ .Values.borderGateway | quote }},
+        "range_start": {{ .Values.borderRangeStart | quote }},
+        "range": {{ .Values.borderSubnet | quote }}
+      }
+    }

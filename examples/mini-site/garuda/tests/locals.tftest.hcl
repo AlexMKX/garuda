@@ -2,35 +2,36 @@
 # Covers ipt_routes, tunnel_facts, firezone_facts, smoke inventory shape.
 
 mock_provider "routeros" {}
-mock_provider "ansible" {}
 mock_provider "wireguard" {}
 mock_provider "local" {}
 mock_provider "tls" {}
 mock_provider "dns" {}
+mock_provider "helm" {}
+mock_provider "kubernetes" {}
 
 variables {
   env_slug = "mini-site"
 
   connection_data_hub = {
-    host = "192.0.2.1", user = "operator", connection = "ssh", network_os = "linux",
-    password = null, ssh_private_key_file = null, ssh_private_key = null,
+    host           = "192.0.2.1", user = "operator", connection = "ssh", network_os = "linux",
+    password       = null, ssh_private_key_file = null, ssh_private_key = null,
     instance_token = "mock-hub",
   }
 
   connection_data_edges = {
     pt = {
-      host = "192.0.2.2", user = "operator", connection = "ssh", network_os = "linux",
-      password = null, ssh_private_key_file = null, ssh_private_key = null,
+      host           = "192.0.2.2", user = "operator", connection = "ssh", network_os = "linux",
+      password       = null, ssh_private_key_file = null, ssh_private_key = null,
       instance_token = "mock-pt",
     }
     de = {
-      host = "192.0.2.3", user = "operator", connection = "ssh", network_os = "linux",
-      password = null, ssh_private_key_file = null, ssh_private_key = null,
+      host           = "192.0.2.3", user = "operator", connection = "ssh", network_os = "linux",
+      password       = null, ssh_private_key_file = null, ssh_private_key = null,
       instance_token = "mock-de",
     }
   }
 
-  cloudflare_hub   = { zone_id = "fixture-zone", record_name = "hub.example.net" }
+  cloudflare_hub = { zone_id = "fixture-zone", record_name = "hub.example.net" }
   cloudflare_edges = {
     pt = { zone_id = "fixture-zone", record_name = "pt.example.net" }
     de = { zone_id = "fixture-zone", record_name = "de.example.net" }
@@ -38,7 +39,7 @@ variables {
 
   routeros = {
     hostname = "routeros-example", management_host = "203.0.113.1",
-    user = "admin", uplink_interface = "ether1"
+    user     = "admin", uplink_interface = "ether1"
   }
   routeros_password    = "admin"
   routeros_lan_gateway = "203.0.113.1"
@@ -127,6 +128,50 @@ run "tunnel_facts_structure" {
   }
 }
 
+run "wireguard_kube_inputs_map_edge_ospf" {
+  command = plan
+
+  assert {
+    condition     = local.wireguard_kube_inputs["pt"].config.kernel_ifname == module.wireguard_tunnel["pt"].peers["edge"].kernel_ifname
+    error_message = "pt kube WireGuard config must use the edge kernel interface name from wireguard_tunnel"
+  }
+
+  assert {
+    condition     = local.wireguard_kube_inputs["pt"].ospf.router_id == var.edges["pt"].ospf_router_id_peer
+    error_message = "pt kube OSPF router_id must come from var.edges.pt.ospf_router_id_peer"
+  }
+
+  assert {
+    condition     = local.wireguard_kube_inputs["pt"].ospf.interfaces == [module.wireguard_tunnel["pt"].peers["edge"].kernel_ifname]
+    error_message = "pt kube OSPF interfaces must contain only the edge WireGuard kernel interface"
+  }
+
+  assert {
+    condition     = local.wireguard_kube_inputs["de"].config.kernel_ifname == module.wireguard_tunnel["de"].peers["edge"].kernel_ifname
+    error_message = "de kube WireGuard config must use the edge kernel interface name from wireguard_tunnel"
+  }
+
+  assert {
+    condition     = local.wireguard_kube_inputs["de"].ospf.router_id == var.edges["de"].ospf_router_id_peer
+    error_message = "de kube OSPF router_id must come from var.edges.de.ospf_router_id_peer"
+  }
+
+  assert {
+    condition     = local.wireguard_kube_inputs["de"].ospf.interfaces == [module.wireguard_tunnel["de"].peers["edge"].kernel_ifname]
+    error_message = "de kube OSPF interfaces must contain only the edge WireGuard kernel interface"
+  }
+
+  assert {
+    condition     = local.wireguard_kube_inputs["pt"].allowed_nets == ["0.0.0.0/0", "224.0.0.0/4"]
+    error_message = "pt kube WireGuard allowed_nets must preserve default route plus OSPF multicast"
+  }
+
+  assert {
+    condition     = local.wireguard_kube_inputs["de"].allowed_nets == ["0.0.0.0/0", "224.0.0.0/4"]
+    error_message = "de kube WireGuard allowed_nets must preserve default route plus OSPF multicast"
+  }
+}
+
 run "ipt_routes_two_entries" {
   command = plan
 
@@ -174,15 +219,6 @@ run "regression_catchall_domain_in_ipt_routes" {
   }
 }
 
-run "collection_root_resolves_to_examples_mini_site" {
-  command = plan
-
-  assert {
-    condition     = endswith(local.collection_root, "/examples/mini-site")
-    error_message = "local.collection_root must point at examples/mini-site/, got: ${local.collection_root}"
-  }
-}
-
 run "ansible_smoke_inventory_shape" {
   command = plan
 
@@ -207,5 +243,15 @@ run "ansible_smoke_inventory_shape" {
       contains(entry.groups, "smoke_all")
     ])
     error_message = "every host must be in 'smoke_all' group"
+  }
+
+  assert {
+    condition     = contains(output.ansible_smoke_inventory.pt.groups, "k3s_hosts")
+    error_message = "pt smoke inventory entry must be in k3s_hosts"
+  }
+
+  assert {
+    condition     = contains(output.ansible_smoke_inventory.de.groups, "k3s_hosts")
+    error_message = "de smoke inventory entry must be in k3s_hosts"
   }
 }

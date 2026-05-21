@@ -7,12 +7,20 @@ run "default_render_contains_installer_and_bind" {
     error_message = "Default install_url and curl pipe must be present."
   }
   assert {
-    condition     = strcontains(output.user_data_parts[0], "--bind-address=127.0.0.1")
-    error_message = "Invariant --bind-address=127.0.0.1 must be present."
+    condition     = strcontains(output.user_data_parts[0], "--tls-san=127.0.0.1")
+    error_message = "Invariant --tls-san=127.0.0.1 must be present."
   }
   assert {
     condition     = strcontains(output.user_data_parts[0], "--https-listen-port=6443")
     error_message = "Invariant --https-listen-port=6443 must be present."
+  }
+  assert {
+    condition     = !strcontains(output.user_data_parts[0], "--bind-address=")
+    error_message = "Stale --bind-address invariant must not appear; the apiserver listens on all interfaces and is constrained by the host firewall."
+  }
+  assert {
+    condition     = !strcontains(output.user_data_parts[0], "--advertise-address=")
+    error_message = "--advertise-address must not be set; kubernetes endpoint validation forbids the loopback range for the `kubernetes` service Endpoints, and we have no public IP to advertise."
   }
   assert {
     condition     = startswith(output.user_data_parts[0], "#cloud-config")

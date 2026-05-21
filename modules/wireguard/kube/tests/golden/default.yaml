@@ -1,0 +1,102 @@
+---
+# Source: wireguard/templates/secret.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: wg-wg-pt-keys
+  namespace: "garuda"
+  labels:
+    app.kubernetes.io/name: wireguard
+    app.kubernetes.io/instance: "wg-pt"
+    app.kubernetes.io/managed-by: Helm
+    garuda.managed-by: helm
+type: Opaque
+stringData:
+  WG_PRIVATE_KEY: "stubprivatekey"
+  WG_PEER_PUBLIC_KEY: "stubpublickey"
+
+---
+# Source: wireguard/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: "wg-pt"
+  namespace: "garuda"
+  labels:
+    app.kubernetes.io/name: wireguard
+    app.kubernetes.io/instance: "wg-pt"
+    app.kubernetes.io/managed-by: Helm
+    garuda.managed-by: helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: wireguard
+      app.kubernetes.io/instance: "wg-pt"
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: wireguard
+        app.kubernetes.io/instance: "wg-pt"
+        app.kubernetes.io/managed-by: Helm
+        garuda.managed-by: helm
+      annotations:
+        k8s.v1.cni.cncf.io/networks: "backbone@backbone,border@border"
+    spec:
+      restartPolicy: Always
+      # Match the existing docker-compose stack's sysctls byte-for-byte.
+      # All three are flagged "unsafe" by upstream kubelet and must be
+      # allow-listed at k3s install time via
+      # `--kubelet-arg=allowed-unsafe-sysctls=net.ipv4.ip_forward,net.ipv4.conf.all.src_valid_mark,net.ipv4.conf.all.rp_filter`.
+      # See examples/mini-site/infra/gcp.tf for the operator-side wiring.
+      securityContext:
+        sysctls:
+          - name: net.ipv4.ip_forward
+            value: "1"
+          - name: net.ipv4.conf.all.src_valid_mark
+            value: "1"
+          - name: net.ipv4.conf.all.rp_filter
+            value: "2"
+      containers:
+        - name: wg
+          # Container entrypoint is owned by the image
+          # (ghcr.io/alexmkx/garuda-wireguard). The image reads env vars
+          # below and brings up the WireGuard interface. Variable names
+          # match roles/wireguard/files/wireguard/entrypoint.sh so the
+          # image contract is identical to the Compose stack.
+          image: "ghcr.io/alexmkx/garuda-wireguard:latest"
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            # The secret carries WG_PRIVATE_KEY, WG_PEER_PUBLIC_KEY and
+            # the optional WG_PEER_PRESHARED_KEY.
+            - secretRef:
+                name: wg-wg-pt-keys
+          env:
+            - name: WG_INTERFACE
+              value: "wg-pt"
+            - name: WG_ADDRESS
+              value: "192.0.2.2/30"
+            - name: WG_TABLE
+              value: "off"
+            - name: WG_PEER_ENDPOINT
+              # Image entrypoint feeds WG_PEER_ENDPOINT verbatim into
+              # the WireGuard config's `Endpoint = <host>:<port>` line.
+              # The Compose stack (roles/wireguard/templates/wireguard.env.j2)
+              # joins host and listen_port the same way.
+              value: "hub.example.net:51820"
+            - name: WG_PEER_ALLOWED_IPS
+              value: "0.0.0.0/0"
+            - name: WG_PEER_PERSISTENT_KEEPALIVE
+              value: "25"
+            # WG_NIC_ATTACH advertises to roles/wireguard/postup.sh which
+            # secondary interfaces are attached. The Compose stack maps
+            # this to docker bridge networks; the k3s deployment maps it
+            # to Multus NetworkAttachmentDefinitions via the pod
+            # annotation `k8s.v1.cni.cncf.io/networks`. postup.sh treats
+            # `border` membership as the trigger for installing the NAT
+            # postrouting rule and the via_tunnel RPDB.
+            - name: WG_NIC_ATTACH
+              value: "[\"backbone\",\"border\"]"
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN"]

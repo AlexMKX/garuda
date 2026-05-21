@@ -42,8 +42,8 @@ run "user_data_carries_k3s_installer_and_bind" {
   }
 
   assert {
-    condition     = can(regex("--bind-address=127.0.0.1", module.host.test_cloud_init_user_data))
-    error_message = "Invariant --bind-address=127.0.0.1 must appear in user-data."
+    condition     = can(regex("--tls-san=127.0.0.1", module.host.test_cloud_init_user_data))
+    error_message = "Invariant --tls-san=127.0.0.1 must appear in user-data."
   }
 
   assert {

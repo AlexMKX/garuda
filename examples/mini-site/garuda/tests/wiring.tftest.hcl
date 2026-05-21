@@ -1,35 +1,36 @@
 # Validates that the smoke inventory is correctly wired from connection_data.
 
 mock_provider "routeros" {}
-mock_provider "ansible" {}
 mock_provider "wireguard" {}
 mock_provider "local" {}
 mock_provider "tls" {}
 mock_provider "dns" {}
+mock_provider "helm" {}
+mock_provider "kubernetes" {}
 
 variables {
   env_slug = "mini-site"
 
   connection_data_hub = {
-    host = "192.0.2.1", user = "operator", connection = "ssh", network_os = "linux",
-    password = null, ssh_private_key_file = null, ssh_private_key = null,
+    host           = "192.0.2.1", user = "operator", connection = "ssh", network_os = "linux",
+    password       = null, ssh_private_key_file = null, ssh_private_key = null,
     instance_token = "mock-hub",
   }
 
   connection_data_edges = {
     pt = {
-      host = "192.0.2.2", user = "operator", connection = "ssh", network_os = "linux",
-      password = null, ssh_private_key_file = null, ssh_private_key = null,
+      host           = "192.0.2.2", user = "operator", connection = "ssh", network_os = "linux",
+      password       = null, ssh_private_key_file = null, ssh_private_key = null,
       instance_token = "mock-pt",
     }
     de = {
-      host = "192.0.2.3", user = "operator", connection = "ssh", network_os = "linux",
-      password = null, ssh_private_key_file = null, ssh_private_key = null,
+      host           = "192.0.2.3", user = "operator", connection = "ssh", network_os = "linux",
+      password       = null, ssh_private_key_file = null, ssh_private_key = null,
       instance_token = "mock-de",
     }
   }
 
-  cloudflare_hub   = { zone_id = "fixture-zone", record_name = "hub.example.net" }
+  cloudflare_hub = { zone_id = "fixture-zone", record_name = "hub.example.net" }
   cloudflare_edges = {
     pt = { zone_id = "fixture-zone", record_name = "pt.example.net" }
     de = { zone_id = "fixture-zone", record_name = "de.example.net" }
@@ -37,7 +38,7 @@ variables {
 
   routeros = {
     hostname = "routeros-example", management_host = "203.0.113.1",
-    user = "admin", uplink_interface = "ether1"
+    user     = "admin", uplink_interface = "ether1"
   }
   routeros_password    = "admin"
   routeros_lan_gateway = "203.0.113.1"
@@ -155,5 +156,29 @@ run "linux_inventory_uses_connection_data" {
   assert {
     condition     = output.ansible_smoke_inventory.de.ansible_host == var.connection_data_edges.de.host
     error_message = "de inventory host must come from var.connection_data_edges.de.host"
+  }
+}
+
+run "edge_k3s_modules_are_wired" {
+  command = plan
+
+  assert {
+    condition     = module.garuda_k8s["pt"].namespace == "garuda"
+    error_message = "pt Kubernetes bootstrap must create/use namespace garuda"
+  }
+
+  assert {
+    condition     = module.garuda_k8s["de"].namespace == "garuda"
+    error_message = "de Kubernetes bootstrap must create/use namespace garuda"
+  }
+
+  assert {
+    condition     = module.wireguard_kube["pt"].deployment_name == "wg-pt"
+    error_message = "pt Kubernetes WireGuard deployment must be wg-pt"
+  }
+
+  assert {
+    condition     = module.wireguard_kube["de"].deployment_name == "wg-de"
+    error_message = "de Kubernetes WireGuard deployment must be wg-de"
   }
 }

@@ -1,7 +1,5 @@
 ---
 # Phase 4: WireGuard tunnel handshake freshness and transfer.
-# Runs on hub (wg-hub_ros + wg-pt + wg-de) and pt (wg-pt), de (wg-de).
-# Tunnel names use dashes after env_slug-mandatory rename.
 - name: "§4 — choose tunnels per host"
   ansible.builtin.set_fact:
     _wg_tunnels: >-
@@ -9,21 +7,45 @@
          else (['wg-pt'] if z2g_role == 'pt'
          else (['wg-de'] if z2g_role == 'de' else [])) }}
 
-- name: "§4 — read WireGuard dump"
+- name: "§4 — read WireGuard dump on hub docker workloads"
   community.docker.docker_container_exec:
     container: "{{ z2g_compose_project_prefix }}{{ item }}-{{ item }}-1"
     argv: [wg, show, "{{ item }}", dump]
   become: true
-  register: _wg_dump
+  register: _wg_dump_hub
   changed_when: false
   loop: "{{ _wg_tunnels }}"
   loop_control:
     label: "{{ item }}"
+  when: z2g_role == 'hub'
+
+- name: "§4 — read WireGuard dump on edge k3s workloads"
+  ansible.builtin.command:
+    cmd: >
+      kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml
+        -n garuda exec deploy/{{ item }} -c wg -- wg show {{ item }} dump
+  become: true
+  register: _wg_dump_edge
+  changed_when: false
+  loop: "{{ _wg_tunnels }}"
+  loop_control:
+    label: "{{ item }}"
+  when: z2g_role in ['pt', 'de']
+
+- name: "§4 — merge WireGuard dump results"
+  # Loops register a result per iteration even when the `when:` clause
+  # skips the task, so the merged list can contain entries that only
+  # have `{skipped: true, item: ...}` and no `stdout`. Filter them out
+  # so the assert below never touches a skipped entry.
+  ansible.builtin.set_fact:
+    _wg_dump_results: >-
+      {{ (((_wg_dump_hub | default({'results': []})).results)
+          + ((_wg_dump_edge | default({'results': []})).results))
+         | rejectattr('skipped', 'defined') | list }}
 
 - name: "§4 — assert handshake fresh and non-zero transfer"
   ansible.builtin.assert:
     that:
-      # wg dump line format: pubkey presharedkey endpoint allowed_ips latest_handshake rx tx keepalive
       - (item.stdout_lines | length) >= 2
       - >-
         (item.stdout_lines[1].split('\t')[4] | int) > 0
@@ -35,6 +57,6 @@
       Tunnel {{ item.item }} on {{ inventory_hostname }} failed handshake/transfer check.
       Output:
       {{ item.stdout }}
-  loop: "{{ _wg_dump.results }}"
+  loop: "{{ _wg_dump_results }}"
   loop_control:
     label: "{{ item.item }}"

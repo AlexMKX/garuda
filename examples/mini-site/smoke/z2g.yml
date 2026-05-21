@@ -77,6 +77,18 @@
                     z2g_role: {{ entry.key }}
           {% endif %}
           {% endfor %}
+              k3s_hosts:
+                hosts:
+          {% for entry in _servers | dict2items %}
+          {% if 'k3s_hosts' in (entry.value.groups | default([])) %}
+                  {{ entry.value.inventory_name }}:
+                    ansible_host: "{{ entry.value.ansible_host }}"
+                    ansible_user: "{{ entry.value.ansible_user }}"
+                    ansible_connection: "{{ entry.value.ansible_connection }}"
+                    ansible_ssh_private_key_file: "{{ entry.value.ansible_ssh_private_key_file }}"
+                    z2g_role: {{ entry.key }}
+          {% endif %}
+          {% endfor %}
               routeros:
                 vars:
                   # RouterOS network_cli auth shared across all routeros hosts.
@@ -132,32 +144,40 @@
         hub_inventory_host: "{{ _smoke_inv['hub'].inventory_name }}"
 
 - name: "Phase 0b — ensure python3-docker is available for community.docker modules"
-  hosts: linux_hosts
+  # Only hub workloads use Docker; k3s edges have no docker daemon and
+  # no python3-docker package. Limit the bootstrap to the hub group so
+  # the playbook does not fail on edges.
+  hosts: linux_hosts:!k3s_hosts
   gather_facts: false
   tags: [always]
   tasks:
-    - name: "Bootstrap — install python3-docker on linux_hosts"
+    - name: "Bootstrap — install python3-docker on the hub"
       ansible.builtin.package:
         name: python3-docker
         state: present
       become: true
 
-- name: "Phase 3 — container health"
-  hosts: linux_hosts
+- name: "Phase 3 — container health (hub docker workloads)"
+  # Phase 3 inspects hub-side docker containers. Edges run k3s and have
+  # no containers in scope for this assertion list — skip them.
+  hosts: linux_hosts:!k3s_hosts
   gather_facts: false
   tags: [phase_3]
   tasks:
     - ansible.builtin.import_tasks: tasks/phase_3_containers.yml
 
-- name: "Phase 3.5 — border network"
-  hosts: linux_hosts
+- name: "Phase 3.5 — border network (hub docker network)"
+  hosts: linux_hosts:!k3s_hosts
   gather_facts: false
   tags: [phase_3, border]
   tasks:
     - ansible.builtin.import_tasks: tasks/phase_35_border.yml
 
 - name: "Phase 3.5b — host sysctl defaults"
-  hosts: linux_hosts
+  # Hub-side host sysctl invariants set by the linux_host_prerequisites
+  # role. Edges manage equivalent kernel state via k3s + pod
+  # securityContext, so the file-based check is hub-only.
+  hosts: linux_hosts:!k3s_hosts
   gather_facts: false
   tags: [phase_3, sysctl]
   tasks:

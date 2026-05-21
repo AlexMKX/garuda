@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["namespace", "installCni", "versions"],
+  "properties": {
+    "namespace": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+    },
+    "installCni": {
+      "type": "boolean"
+    },
+    "versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["multus_image", "whereabouts_image"],
+      "properties": {
+        "multus_image": {
+          "type": "string",
+          "minLength": 1
+        },
+        "whereabouts_image": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

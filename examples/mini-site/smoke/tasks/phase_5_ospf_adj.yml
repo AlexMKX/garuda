@@ -1,31 +1,48 @@
 ---
-# Phase 5: OSPF adjacency — Linux side (vtysh in FRR sidecars).
+# Phase 5: OSPF adjacency. Hub remains docker-compose; edges run k3s.
 - name: "§5 — choose OSPF sidecars per host"
   ansible.builtin.set_fact:
-    _ospf_sidecars: >-
-      {{ [z2g_ospf_ipt_server_container] if z2g_role == 'hub'
-         else ([z2g_ospf_wg_pt_container] if z2g_role == 'pt'
-         else ([z2g_ospf_wg_de_container] if z2g_role == 'de'
-         else [])) }}
+    _ospf_sidecars: "{{ [z2g_ospf_ipt_server_container] if z2g_role == 'hub' else [] }}"
 
-- name: "§5 — read OSPF neighbor state"
+- name: "§5 — read hub OSPF neighbor state"
   community.docker.docker_container_exec:
     container: "{{ item }}"
     argv: [vtysh, -c, "show ip ospf neighbor"]
   become: true
-  register: _vtysh
+  register: _vtysh_hub
   changed_when: false
   loop: "{{ _ospf_sidecars }}"
   loop_control:
     label: "{{ item }}"
+  when: z2g_role == 'hub'
+
+- name: "§5 — read edge OSPF neighbor state"
+  ansible.builtin.command:
+    cmd: >
+      kubectl --kubeconfig /etc/rancher/k3s/k3s.yaml
+        -n garuda exec deploy/wg-{{ z2g_role }} -c frr-sidecar --
+        vtysh -c 'show ip ospf neighbor'
+  become: true
+  register: _vtysh_edge
+  changed_when: false
+  when: z2g_role in ['pt', 'de']
+
+- name: "§5 — merge OSPF outputs"
+  # See phase_4_wireguard.yml for the rationale of the skipped-filter:
+  # ansible loops register a result entry even on `when:` skips.
+  ansible.builtin.set_fact:
+    _vtysh_results: >-
+      {{ (((_vtysh_hub | default({'results': []})).results)
+          + ([_vtysh_edge] if (_vtysh_edge is defined and not (_vtysh_edge.skipped | default(false))) else []))
+         | rejectattr('skipped', 'defined') | list }}
 
 - name: "§5 — assert at least one Full-state OSPF neighbor per sidecar"
   ansible.builtin.assert:
     that: item.stdout is search('Full/')
     fail_msg: |
-      Sidecar {{ item.item }} on {{ inventory_hostname }} has no Full-state neighbor.
+      Sidecar {{ item.item | default('edge frr-sidecar') }} on {{ inventory_hostname }} has no Full-state neighbor.
       Output:
       {{ item.stdout }}
-  loop: "{{ _vtysh.results }}"
+  loop: "{{ _vtysh_results }}"
   loop_control:
-    label: "{{ item.item }}"
+    label: "{{ item.item | default('edge frr-sidecar') }}"

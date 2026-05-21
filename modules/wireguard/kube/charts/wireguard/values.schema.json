@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["namespace", "name", "config", "peer", "allowed_nets", "table", "persistent_keepalive", "nic_attach", "images"],
+  "properties": {
+    "namespace": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" },
+    "name": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" },
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kernel_ifname", "private_key", "address", "subnet"],
+      "properties": {
+        "kernel_ifname": { "type": "string", "maxLength": 15 },
+        "private_key":   { "type": "string" },
+        "address":       { "type": "string" },
+        "subnet":        { "type": "string" },
+        "listen_port":   { "type": ["integer", "null"] },
+        "endpoint_host": { "type": ["string", "null"] }
+      }
+    },
+    "peer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["public_key", "endpoint_host", "endpoint_listen_port", "address"],
+      "properties": {
+        "public_key":           { "type": "string" },
+        "endpoint_host":        { "type": "string" },
+        "endpoint_listen_port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "preshared_key":        { "type": "string" },
+        "address":              { "type": "string" }
+      }
+    },
+    "allowed_nets":         { "type": "array", "items": { "type": "string" } },
+    "table":                { "type": "string" },
+    "persistent_keepalive": { "type": "integer", "minimum": 0 },
+    "nic_attach":           { "type": "array", "items": { "type": "string" } },
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wireguard"],
+      "properties": {
+        "wireguard": { "type": "string" },
+        "frr":       { "type": "string" }
+      }
+    },
+    "ospf": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["router_id", "interfaces"],
+      "properties": {
+        "router_id":          { "type": "string" },
+        "area":               { "type": "string" },
+        "interfaces":         { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "passive_interfaces": { "type": "array", "items": { "type": "string" } },
+        "default_originate":  { "type": "boolean" },
+        "redistribute":       { "type": "array", "items": { "enum": ["connected", "kernel", "static"] } },
+        "extra_frr_conf":     { "type": "string" }
+      }
+    }
+  }
+}

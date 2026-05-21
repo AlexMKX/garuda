@@ -47,13 +47,8 @@ z2g_expected_containers_hub:
   - "{{ z2g_ospf_firezone_container }}"
   - "{{ z2g_backbone_ospf_injector_container }}"
 
-z2g_expected_containers_pt:
-  - "{{ z2g_wg_pt_container }}"
-  - "{{ z2g_backbone_ospf_injector_container }}"
-
-z2g_expected_containers_de:
-  - "{{ z2g_wg_de_container }}"
-  - "{{ z2g_backbone_ospf_injector_container }}"
+z2g_expected_containers_pt: []
+z2g_expected_containers_de: []
 
 # Network invariants (phase 3.5, 7).
 z2g_border_subnet: "192.0.2.64/26"

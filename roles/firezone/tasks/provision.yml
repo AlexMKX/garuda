@@ -50,6 +50,13 @@
     source: build
     build:
       path: "{{ fz_firezone_dir }}/conntrack_log"
+      # Use the host network for RUN steps so apk fetches from
+      # dl-cdn.alpinelinux.org succeed even when the default Docker
+      # bridge network has constrained egress (e.g., MTU mismatch on
+      # GCE-side wg overlays, restrictive cloud-network DNS, etc.).
+      # The hub VM itself has working internet egress per the cloud
+      # firewall rules, so this surfaces no additional attack surface.
+      network: host
   become: true
 
 - name: Build firezone image
@@ -58,6 +65,10 @@
     source: build
     build:
       path: "{{ fz_firezone_dir }}/firezone_image"
+      # Same rationale as conntrack-log above: apk fetches in the
+      # firezone image's "apk add nftables" step need host network
+      # egress.
+      network: host
   become: true
 
 - name: Write credentials env file

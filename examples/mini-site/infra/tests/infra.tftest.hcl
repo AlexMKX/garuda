@@ -137,3 +137,31 @@ run "cloudflare_records_planned" {
     error_message = "edges cloudflare_record map must include de"
   }
 }
+
+run "edge_user_data_includes_k3s" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for _, m in module.gcp_edges :
+      strcontains(m.test_cloud_init_user_data, "curl -sfL https://get.k3s.io")
+    ])
+    error_message = "every GCP edge VM must include the k3s installer in cloud-init user data"
+  }
+
+  assert {
+    condition = alltrue([
+      for _, m in module.gcp_edges :
+      strcontains(m.test_cloud_init_user_data, "--tls-san=127.0.0.1")
+    ])
+    error_message = "every GCP edge VM must add 127.0.0.1 as a TLS SAN on the k3s API"
+  }
+
+  assert {
+    condition = alltrue([
+      for _, m in module.gcp_edges :
+      strcontains(m.test_cloud_init_user_data, "--https-listen-port=6443")
+    ])
+    error_message = "every GCP edge VM must keep the k3s API on port 6443"
+  }
+}

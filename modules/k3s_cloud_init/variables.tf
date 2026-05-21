@@ -25,8 +25,8 @@ variable "install_url" {
 
 variable "extra_flags" {
   description = <<EOT
-Extra flags appended to INSTALL_K3S_EXEC after the invariant
---bind-address=127.0.0.1 --https-listen-port=6443.
+Extra flags appended to INSTALL_K3S_EXEC after the invariants
+--tls-san=127.0.0.1 --https-listen-port=6443.
 Each element must start with '--'.
 EOT
   type        = list(string)

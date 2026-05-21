@@ -1,0 +1,6 @@
+apiVersion: v2
+name: garuda-cni
+description: "Vendored Multus + Whereabouts DaemonSets. Installed before the main garuda chart so the NetworkAttachmentDefinition CRD exists by the time NAD resources apply."
+type: application
+version: 0.2.5
+appVersion: "multus-v4.2.4-whereabouts-v0.9.3"

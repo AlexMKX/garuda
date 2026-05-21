@@ -1,0 +1,6 @@
+apiVersion: v2
+name: garuda
+description: "Garuda namespace bootstrap: NetworkAttachmentDefinitions (backbone, border) and the network-meta ConfigMap. Requires the Multus CRD already present in the cluster (install garuda-cni first)."
+type: application
+version: 0.2.2
+appVersion: "0.1.0"

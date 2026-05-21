@@ -72,8 +72,8 @@ variable "routeros_password" {
 }
 
 # --- Topology CIDRs (flat, non host-scoped) ---
-variable "backbone_subnet"        { type = string }
-variable "border_subnet"          { type = string }
+variable "backbone_subnet" { type = string }
+variable "border_subnet" { type = string }
 variable "firezone_client_subnet" { type = string }
 
 # --- Hub FQDN prefix + base domain (derives Firezone server_url) ---
@@ -108,10 +108,10 @@ variable "edges" {
 variable "hub_ros" {
   description = "WireGuard tunnel parameters for the RouterOS ↔ hub tunnel."
   type = object({
-    hub_cidr            = string
-    routeros_cidr       = string
-    listen_port         = number
-    ospf_router_id_hub  = string
+    hub_cidr           = string
+    routeros_cidr      = string
+    listen_port        = number
+    ospf_router_id_hub = string
   })
 }
 
@@ -159,6 +159,12 @@ variable "wireguard_image" {
   default     = "ghcr.io/alexmkx/garuda-wireguard:latest"
 }
 
+variable "frr_sidecar_image" {
+  description = "Docker image for the FRR sidecar container used by Kubernetes WireGuard workloads."
+  type        = string
+  default     = "ghcr.io/alexmkx/garuda-frr-sidecar:latest"
+}
+
 variable "fz_firezone_image" {
   description = "Docker image for the Firezone container workload."
   type        = string
@@ -175,4 +181,17 @@ variable "ipt_powerdns_image" {
   description = "Docker image for the PowerDNS container used by ipt_server."
   type        = string
   default     = "powerdns/pdns-recursor:latest"
+}
+
+# --- Path to garuda-tunnel state JSON ---
+variable "tunnel_path" {
+  description = <<EOT
+Absolute filesystem path to the JSON file written by the Terragrunt
+before_hook running `garuda-tunnel start`. The file contains the
+OutputSchema documented at
+https://github.com/AlexMKX/garuda-tunnel/blob/main/README.md, with
+one entry per edge under `connections.<edge>`. Decoded via
+`jsondecode(file(var.tunnel_path))` into `local.tunnel`.
+EOT
+  type        = string
 }

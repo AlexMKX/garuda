@@ -1,0 +1,14 @@
+# Default values for the garuda-cni chart. The Terraform helm_release
+# in modules/garuda_k8s/main.tf overrides these.
+namespace: garuda
+# When false, the chart renders zero resources (the operator already
+# installed Multus + Whereabouts cluster-wide and wants the main
+# garuda chart to consume that pre-existing CNI).
+installCni: true
+
+# Pinned image tags for vendored CNI components. These images carry
+# kernel-level capabilities (CAP_NET_ADMIN, hostNetwork) and govern
+# pod networking on every edge — bump on review.
+versions:
+  multus_image: "rancher/hardened-multus-thick:v4.2.4-build20260310"
+  whereabouts_image: "rancher/hardened-whereabouts:v0.9.3-build20260511"
